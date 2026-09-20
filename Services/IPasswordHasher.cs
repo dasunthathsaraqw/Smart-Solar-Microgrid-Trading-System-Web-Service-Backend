@@ -1,7 +1,7 @@
 /**
  * File: IPasswordHasher.cs
  * Purpose: Contract for hashing and verifying user passwords.
- * Author: <Your Name>
+ * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
 

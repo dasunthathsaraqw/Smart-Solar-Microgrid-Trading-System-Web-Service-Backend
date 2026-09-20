@@ -1,7 +1,7 @@
 /**
  * File: IJwtService.cs
  * Purpose: Contract for generating signed JWT access tokens for authenticated users.
- * Author: <Your Name>
+ * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
 

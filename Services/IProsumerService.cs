@@ -1,7 +1,7 @@
 /**
  * File: IProsumerService.cs
  * Purpose: Contract for prosumer CRUD and lifecycle operations (approve/deactivate/reactivate).
- * Author: <Your Name>
+ * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
 
