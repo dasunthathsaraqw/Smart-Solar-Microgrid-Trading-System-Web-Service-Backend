@@ -2,7 +2,7 @@
  * File: UpdateProsumerRequest.cs
  * Purpose: Request payload for PUT /api/prosumers/{nic} — partial update of an existing prosumer.
  *          The NIC itself is never editable since it is the prosumer's primary identifier.
- * Author: <Your Name>
+ * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
 
