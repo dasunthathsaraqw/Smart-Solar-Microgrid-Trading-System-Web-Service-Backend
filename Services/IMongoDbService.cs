@@ -16,4 +16,5 @@ public interface IMongoDbService
     IMongoCollection<Prosumer> Prosumers { get; }
     IMongoCollection<SolarStationInfo> Stations { get; }
     IMongoCollection<EnergyReservation> Reservations { get; }
+    IMongoCollection<EnergyBookingSlot> Slots { get; }
 }
