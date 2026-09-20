@@ -19,6 +19,7 @@ public class AuthController : ControllerBase
 {
     private readonly IAuthService _authService;
 
+    // Initializes the controller with the authentication service.
     public AuthController(IAuthService authService)
     {
         _authService = authService;
@@ -28,13 +29,21 @@ public class AuthController : ControllerBase
     [HttpPost("login")]
     public async Task<IActionResult> Login([FromBody] LoginRequest request)
     {
-        var result = await _authService.LoginAsync(request);
-        if (result is null)
+        var (response, accountInactive) = await _authService.LoginAsync(request);
+        if (accountInactive)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                message = "Account is pending approval or has been deactivated. Please contact the Backoffice.",
+            });
+        }
+
+        if (response is null)
         {
             return Unauthorized(new { message = "Invalid email or password." });
         }
 
-        return Ok(result);
+        return Ok(response);
     }
 
     // Handles GET /api/auth/me — returns the current authenticated user's info from JWT claims.
