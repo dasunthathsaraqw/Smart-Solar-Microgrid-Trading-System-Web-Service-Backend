@@ -2,7 +2,7 @@
  * File: SlotsController.cs
  * Purpose: Backoffice/Grid Operator endpoints for energy booking slot creation (single and bulk),
  *          lookup, update and deletion.
- * Author: <Your Name>
+ * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
 
