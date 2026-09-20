@@ -24,6 +24,7 @@ builder.Services.AddSingleton<IMongoDbService, MongoDbService>();
 builder.Services.AddScoped<IPasswordHasher, PasswordHasher>();
 builder.Services.AddScoped<IJwtService, JwtService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<IProsumerService, ProsumerService>();
 
 // Controllers with camelCase JSON output to match the JavaScript frontend.
 builder.Services.AddControllers().AddJsonOptions(options =>
