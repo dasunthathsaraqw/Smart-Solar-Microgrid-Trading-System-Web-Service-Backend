@@ -1,7 +1,7 @@
 /**
  * File: Prosumer.cs
  * Purpose: MongoDB document model representing a solar prosumer managed by the Backoffice.
- * Author: <Your Name>
+ * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
 

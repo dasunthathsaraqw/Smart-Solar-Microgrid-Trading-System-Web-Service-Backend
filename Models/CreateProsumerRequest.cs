@@ -1,7 +1,7 @@
 /**
  * File: CreateProsumerRequest.cs
  * Purpose: Request payload for POST /api/prosumers — Backoffice-created prosumer registration.
- * Author: <Your Name>
+ * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
 
