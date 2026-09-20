@@ -1,7 +1,7 @@
 /**
  * File: UpdateSlotRequest.cs
  * Purpose: Request payload for PUT /api/slots/{id} — partial update of an unbooked slot's timing/capacity.
- * Author: <Your Name>
+ * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
 
