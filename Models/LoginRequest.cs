@@ -1,7 +1,7 @@
 /**
  * File: LoginRequest.cs
  * Purpose: Request payload for POST /api/auth/login.
- * Author: <Your Name>
+ * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
 

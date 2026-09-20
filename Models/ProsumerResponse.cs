@@ -2,7 +2,7 @@
  * File: ProsumerResponse.cs
  * Purpose: Prosumer data returned to clients — mirrors Prosumer but omits the password hash
  *          and adds a computed Status field ("active" | "pending" | "deactivated").
- * Author: <Your Name>
+ * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
 

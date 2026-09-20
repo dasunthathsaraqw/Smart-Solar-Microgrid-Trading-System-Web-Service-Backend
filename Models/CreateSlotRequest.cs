@@ -3,7 +3,7 @@
  * Purpose: Request payload for POST /api/slots — creates a single energy booking slot for a station.
  *          Time-window business rules (future date, 30-day limit, duration bounds, overlap,
  *          station active) are enforced in SlotService, not here.
- * Author: <Your Name>
+ * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
 

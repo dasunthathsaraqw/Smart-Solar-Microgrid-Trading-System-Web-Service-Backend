@@ -1,7 +1,7 @@
 /**
  * File: EnergyBookingSlot.cs
  * Purpose: MongoDB document model representing an available (or booked) time window at a station.
- * Author: <Your Name>
+ * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
 
