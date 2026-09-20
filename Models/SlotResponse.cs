@@ -1,7 +1,7 @@
 /**
  * File: SlotResponse.cs
  * Purpose: Slot data returned to clients — mirrors EnergyBookingSlot (no sensitive fields to strip).
- * Author: <Your Name>
+ * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
 

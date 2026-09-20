@@ -1,7 +1,7 @@
 /**
  * File: MongoDbService.cs
  * Purpose: Initializes the MongoDB client/database and exposes the Users collection.
- * Author: <Your Name>
+ * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
 
