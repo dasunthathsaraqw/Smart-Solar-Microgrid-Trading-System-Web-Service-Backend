@@ -1,7 +1,7 @@
 /**
  * File: CreateUserRequest.cs
  * Purpose: Request payload for POST /api/users — creating a Backoffice or GridOperator account.
- * Author: <Your Name>
+ * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
 
@@ -12,6 +12,7 @@ namespace SmartMicrogrid.API.Models;
 public class CreateUserRequest
 {
     [Required]
+    [StringLength(100, MinimumLength = 2)]
     public string Name { get; set; } = string.Empty;
 
     [Required]
