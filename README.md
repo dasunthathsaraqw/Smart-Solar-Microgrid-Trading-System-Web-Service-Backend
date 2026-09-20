@@ -33,12 +33,29 @@ dotnet dev-certs https --trust
 
 `appsettings.json` contains:
 
-- `MongoDB:ConnectionString` / `MongoDB:DatabaseName` — MongoDB Atlas connection.
+- `MongoDB:ConnectionString` / `MongoDB:DatabaseName` — currently set to a local MongoDB
+  instance (`mongodb://localhost:27017/`) for development. Point this at your own local
+  MongoDB (e.g. via MongoDB Compass) or a working Atlas connection string.
 - `Jwt:Key` / `Jwt:Issuer` / `Jwt:Audience` / `Jwt:ExpiryMinutes` — JWT signing settings.
+  `Jwt:Key` in `appsettings.json` is a placeholder — it is **not** a real secret and the
+  app will refuse to sign tokens with it as-is.
 
-**Note:** the `Jwt:Key` here is a locally-generated development secret, and the MongoDB
-connection string is the one supplied for this assignment. Replace both before any
-real/shared deployment — do not commit production credentials to a public repo.
+### Setting your own JWT secret locally
+
+The real signing key is kept out of source control. Create an `appsettings.Development.json`
+(gitignored) in this folder with your own key:
+
+```json
+{
+  "Jwt": {
+    "Key": "<any random string, at least 32 characters>"
+  }
+}
+```
+
+This overrides the placeholder in `appsettings.json` when `ASPNETCORE_ENVIRONMENT=Development`
+(the default for `dotnet run`). Do not commit this file or paste real keys into
+`appsettings.json`.
 
 ## Seed data
 
@@ -46,20 +63,3 @@ On first startup, if the `Users` collection is empty, a default Backoffice accou
 
 - Email: `admin@smartsolar.com`
 - Password: `Admin@123`
-
-## Known issue: MongoDB Atlas hostname does not resolve
-
-While testing this stage, the three shard hostnames in the provided connection string
-(`ac-lr5kmzv-shard-00-0{0,1,2}.i42ot8y.mongodb.net`) returned **NXDOMAIN** (non-existent
-domain) on DNS lookup — not a firewall/timeout, but "this name does not exist." This means
-the app cannot currently reach MongoDB Atlas, so the seed step and any endpoint touching
-the database will fail with a `MongoDB.Driver.MongoConnectionException` /
-`TimeoutException` until a valid connection string is supplied. Likely causes:
-
-- The Atlas cluster was deleted, paused, or renamed since the string was issued.
-- A typo in the cluster/shard hostnames.
-
-**Action needed:** get the current connection string from the MongoDB Atlas dashboard
-(Database → Connect → Drivers) and update `MongoDB:ConnectionString` in `appsettings.json`.
-All application code (models, services, controllers, seeding) is otherwise verified to
-build and run correctly.
