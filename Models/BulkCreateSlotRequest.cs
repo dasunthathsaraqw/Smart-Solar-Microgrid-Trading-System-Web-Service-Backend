@@ -2,7 +2,7 @@
  * File: BulkCreateSlotRequest.cs
  * Purpose: Request payload for POST /api/slots/bulk — generates multiple fixed-interval slots
  *          across a single day for a station (e.g. every 60 minutes from 06:00 to 20:00).
- * Author: <Your Name>
+ * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
 

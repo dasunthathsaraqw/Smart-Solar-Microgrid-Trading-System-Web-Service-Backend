@@ -1,7 +1,7 @@
 /**
  * File: CreateStationRequest.cs
  * Purpose: Request payload for POST /api/stations — registers a new microgrid station.
- * Author: <Your Name>
+ * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
 
