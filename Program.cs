@@ -26,6 +26,7 @@ builder.Services.AddScoped<IJwtService, JwtService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IProsumerService, ProsumerService>();
 builder.Services.AddScoped<IStationService, StationService>();
+builder.Services.AddScoped<ISlotService, SlotService>();
 
 // Controllers with camelCase JSON output to match the JavaScript frontend.
 builder.Services.AddControllers().AddJsonOptions(options =>
