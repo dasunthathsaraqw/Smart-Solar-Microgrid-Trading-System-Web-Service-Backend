@@ -2,7 +2,7 @@
  * File: StationService.cs
  * Purpose: Implements microgrid station CRUD against MongoDB, including unique-name enforcement
  *          and the deactivation block rule (blocked while an "Approved" reservation exists).
- * Author: <Your Name>
+ * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
 
@@ -16,10 +16,12 @@ namespace SmartMicrogrid.API.Services;
 public class StationService : IStationService
 {
     private readonly IMongoDbService _db;
+    private readonly IReservationService _reservationService;
 
-    public StationService(IMongoDbService db)
+    public StationService(IMongoDbService db, IReservationService reservationService)
     {
         _db = db;
+        _reservationService = reservationService;
     }
 
     // Returns stations filtered by "active" | "deactivated", or all when status is null/unknown.
@@ -175,9 +177,10 @@ public class StationService : IStationService
     }
 
     // Checks whether the station has any reservation whose status is exactly "Approved".
+    // Delegates to ReservationService, the single source of truth for reservation rules.
     public async Task<bool> HasActiveReservationsAsync(string stationId)
     {
-        return await _db.Reservations.Find(r => r.StationId == stationId && r.Status == "Approved").AnyAsync();
+        return await _reservationService.HasActiveReservationsAsync(stationId);
     }
 
     // Maps a SolarStationInfo document to its public response shape.

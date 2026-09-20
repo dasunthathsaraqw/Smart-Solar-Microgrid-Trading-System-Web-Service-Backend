@@ -3,7 +3,7 @@
  * Purpose: Implements energy booking slot CRUD against MongoDB, enforcing timing rules
  *          (future date, 30-day window, 30min-8hr duration), station-active checks,
  *          per-station overlap detection, and the booked-slot modification block.
- * Author: <Your Name>
+ * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
 
