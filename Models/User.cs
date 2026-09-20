@@ -1,7 +1,7 @@
 /**
  * File: User.cs
  * Purpose: MongoDB document model representing a system user (Backoffice, GridOperator or Prosumer).
- * Author: <Your Name>
+ * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
 
@@ -40,4 +40,7 @@ public class User
 
     [BsonElement("createdBy")]
     public string? CreatedBy { get; set; }
+
+    [BsonElement("updatedAt")]
+    public DateTime? UpdatedAt { get; set; }
 }
