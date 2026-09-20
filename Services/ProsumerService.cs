@@ -2,7 +2,7 @@
  * File: ProsumerService.cs
  * Purpose: Implements prosumer CRUD and lifecycle rules (NIC/email uniqueness, approval workflow)
  *          against MongoDB. Status is derived, not stored: active | pending | deactivated.
- * Author: <Your Name>
+ * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
 

@@ -1,7 +1,7 @@
 /**
  * File: MongoDbSettings.cs
  * Purpose: Strongly-typed binding for the MongoDB configuration section (connection string, database name).
- * Author: <Your Name>
+ * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
 
