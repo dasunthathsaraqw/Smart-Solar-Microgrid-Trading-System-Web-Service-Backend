@@ -1,7 +1,6 @@
 /**
  * File: StationService.cs
- * Purpose: Implements microgrid station CRUD against MongoDB, including unique-name enforcement
- *          and the deactivation block rule (blocked while an "Approved" reservation exists).
+ * Purpose: Implements station CRUD, nearby search, slot availability counts and lifecycle rules.
  * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
@@ -18,6 +17,7 @@ public class StationService : IStationService
     private readonly IMongoDbService _db;
     private readonly IReservationService _reservationService;
 
+    // Initializes station operations with MongoDB access and reservation lifecycle checks.
     public StationService(IMongoDbService db, IReservationService reservationService)
     {
         _db = db;
@@ -43,6 +43,72 @@ public class StationService : IStationService
     {
         var station = await _db.Stations.Find(s => s.Id == id).FirstOrDefaultAsync();
         return station is null ? null : ToResponse(station);
+    }
+
+    // Returns nearest active stations with one batched query for their next-seven-day available-slot counts.
+    public async Task<List<NearbyStationResponse>> GetNearbyAsync(
+        double latitude,
+        double longitude,
+        double radiusKm,
+        int limit)
+    {
+        if (latitude < -90 || latitude > 90)
+        {
+            throw new InvalidOperationException("Latitude must be between -90 and 90.");
+        }
+
+        if (longitude < -180 || longitude > 180)
+        {
+            throw new InvalidOperationException("Longitude must be between -180 and 180.");
+        }
+
+        if (radiusKm <= 0 || radiusKm > 500)
+        {
+            throw new InvalidOperationException("Radius must be greater than 0 and no more than 500 km.");
+        }
+
+        if (limit <= 0)
+        {
+            throw new InvalidOperationException("Limit must be greater than 0.");
+        }
+
+        // A production-scale dataset should use a MongoDB 2dsphere index and $geoNear. Service-layer
+        // haversine keeps this small dataset's business logic centralized without an index migration.
+        var activeStations = await _db.Stations.Find(s => s.IsActive).ToListAsync();
+        var nearbyStations = activeStations
+            .Select(station => new
+            {
+                Station = station,
+                DistanceKm = CalculateDistanceKm(latitude, longitude, station.Latitude, station.Longitude),
+            })
+            .Where(result => result.DistanceKm <= radiusKm)
+            .OrderBy(result => result.DistanceKm)
+            .Take(limit)
+            .ToList();
+
+        if (nearbyStations.Count == 0)
+        {
+            return [];
+        }
+
+        var stationIds = nearbyStations.Select(result => result.Station.Id).ToList();
+        var now = DateTime.UtcNow;
+        var sevenDaysFromNow = now.AddDays(7);
+        var slotFilter = Builders<EnergyBookingSlot>.Filter.And(
+            Builders<EnergyBookingSlot>.Filter.In(slot => slot.StationId, stationIds),
+            Builders<EnergyBookingSlot>.Filter.Eq(slot => slot.IsBooked, false),
+            Builders<EnergyBookingSlot>.Filter.Gt(slot => slot.StartTime, now),
+            Builders<EnergyBookingSlot>.Filter.Lte(slot => slot.StartTime, sevenDaysFromNow));
+
+        var availableSlots = await _db.Slots.Find(slotFilter).ToListAsync();
+        var slotCounts = availableSlots
+            .GroupBy(slot => slot.StationId)
+            .ToDictionary(group => group.Key, group => group.Count());
+
+        return nearbyStations.Select(result => ToNearbyResponse(
+            result.Station,
+            result.DistanceKm,
+            slotCounts.GetValueOrDefault(result.Station.Id))).ToList();
     }
 
     // Creates a new station, enforcing a case-insensitive unique station name.
@@ -200,5 +266,58 @@ public class StationService : IStationService
             CreatedBy = station.CreatedBy,
             UpdatedAt = station.UpdatedAt,
         };
+    }
+
+    // Maps a station and its computed search values to the nearby-station response shape.
+    private static NearbyStationResponse ToNearbyResponse(
+        SolarStationInfo station,
+        double distanceKm,
+        int availableSlotCount)
+    {
+        return new NearbyStationResponse
+        {
+            Id = station.Id,
+            StationName = station.StationName,
+            Latitude = station.Latitude,
+            Longitude = station.Longitude,
+            CapacityKw = station.CapacityKw,
+            AvailableSlots = station.AvailableSlots,
+            Schedule = station.Schedule,
+            IsActive = station.IsActive,
+            CreatedAt = station.CreatedAt,
+            CreatedBy = station.CreatedBy,
+            UpdatedAt = station.UpdatedAt,
+            DistanceKm = Math.Round(distanceKm, 2, MidpointRounding.AwayFromZero),
+            AvailableSlotCount = availableSlotCount,
+        };
+    }
+
+    // Calculates great-circle distance between two latitude/longitude points with the haversine formula.
+    private static double CalculateDistanceKm(
+        double originLatitude,
+        double originLongitude,
+        double destinationLatitude,
+        double destinationLongitude)
+    {
+        const double earthRadiusKm = 6371;
+
+        // Convert latitude and longitude values from degrees to radians.
+        var originLatitudeRadians = originLatitude * Math.PI / 180;
+        var destinationLatitudeRadians = destinationLatitude * Math.PI / 180;
+        var latitudeDifferenceRadians = (destinationLatitude - originLatitude) * Math.PI / 180;
+        var longitudeDifferenceRadians = (destinationLongitude - originLongitude) * Math.PI / 180;
+
+        // Apply the haversine formula to obtain the central angle between the coordinates.
+        var haversine = Math.Pow(Math.Sin(latitudeDifferenceRadians / 2), 2)
+            + Math.Cos(originLatitudeRadians)
+            * Math.Cos(destinationLatitudeRadians)
+            * Math.Pow(Math.Sin(longitudeDifferenceRadians / 2), 2);
+        var boundedHaversine = Math.Clamp(haversine, 0, 1);
+        var centralAngle = 2 * Math.Atan2(
+            Math.Sqrt(boundedHaversine),
+            Math.Sqrt(1 - boundedHaversine));
+
+        // Convert the central angle into surface distance using Earth's mean radius.
+        return earthRadiusKm * centralAngle;
     }
 }
