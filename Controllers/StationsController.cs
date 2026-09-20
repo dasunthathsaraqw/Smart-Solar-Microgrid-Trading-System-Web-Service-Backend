@@ -1,7 +1,7 @@
 /**
  * File: StationsController.cs
  * Purpose: Backoffice-only endpoints for microgrid station registration, lookup, update and lifecycle actions.
- * Author: <Your Name>
+ * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
 
