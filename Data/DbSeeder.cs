@@ -1,7 +1,7 @@
 /**
  * File: DbSeeder.cs
  * Purpose: Seeds the initial Backoffice admin account on first application startup if the Users collection is empty.
- * Author: <Your Name>
+ * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
 
