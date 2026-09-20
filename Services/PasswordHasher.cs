@@ -1,7 +1,7 @@
 /**
  * File: PasswordHasher.cs
  * Purpose: BCrypt-based implementation of password hashing and verification.
- * Author: <Your Name>
+ * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
 

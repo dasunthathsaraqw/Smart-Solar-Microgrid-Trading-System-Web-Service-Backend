@@ -1,7 +1,7 @@
 /**
  * File: JwtService.cs
  * Purpose: Creates HMAC SHA256-signed JWT tokens carrying the user's id, email, name and role claims.
- * Author: <Your Name>
+ * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
 
