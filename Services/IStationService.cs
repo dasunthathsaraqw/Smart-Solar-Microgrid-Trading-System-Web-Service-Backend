@@ -2,7 +2,7 @@
  * File: IStationService.cs
  * Purpose: Contract for microgrid station CRUD and lifecycle operations, including the
  *          reservation-aware deactivation block rule.
- * Author: <Your Name>
+ * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
 
