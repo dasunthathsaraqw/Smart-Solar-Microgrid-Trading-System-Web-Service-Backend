@@ -1,7 +1,7 @@
 /**
  * File: Program.cs
  * Purpose: Application entry point — configures services, JWT auth, CORS, Swagger and middleware, then seeds the database.
- * Author: <Your Name>
+ * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
 
@@ -24,7 +24,10 @@ builder.Services.AddSingleton<IMongoDbService, MongoDbService>();
 builder.Services.AddScoped<IPasswordHasher, PasswordHasher>();
 builder.Services.AddScoped<IJwtService, JwtService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<IUserService, UserService>();
 builder.Services.AddScoped<IProsumerService, ProsumerService>();
+builder.Services.AddScoped<IReservationService, ReservationService>();
+builder.Services.AddScoped<IReportService, ReportService>();
 builder.Services.AddScoped<IStationService, StationService>();
 builder.Services.AddScoped<ISlotService, SlotService>();
 

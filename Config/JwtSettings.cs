@@ -1,7 +1,7 @@
 /**
  * File: JwtSettings.cs
  * Purpose: Strongly-typed binding for the JWT configuration section (signing key, issuer, audience, expiry).
- * Author: <Your Name>
+ * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
 
