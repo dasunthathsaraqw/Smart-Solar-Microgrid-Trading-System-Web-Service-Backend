@@ -1,7 +1,7 @@
 /**
  * File: UpdateStationRequest.cs
  * Purpose: Request payload for PUT /api/stations/{id} — partial update of an existing station.
- * Author: <Your Name>
+ * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
 
