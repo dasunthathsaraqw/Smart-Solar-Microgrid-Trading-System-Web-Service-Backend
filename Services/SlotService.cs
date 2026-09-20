@@ -1,8 +1,7 @@
 /**
  * File: SlotService.cs
- * Purpose: Implements energy booking slot CRUD against MongoDB, enforcing timing rules
- *          (future date, 30-day window, 30min-8hr duration), station-active checks,
- *          per-station overlap detection, and the booked-slot modification block.
+ * Purpose: Implements slot availability and CRUD rules against MongoDB, including active-station,
+ *          timing, overlap and booked-slot protections.
  * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
@@ -16,6 +15,7 @@ public class SlotService : ISlotService
 {
     private readonly IMongoDbService _db;
 
+    // Initializes slot operations with access to station and slot collections.
     public SlotService(IMongoDbService db)
     {
         _db = db;
@@ -62,6 +62,23 @@ public class SlotService : ISlotService
     public async Task<List<SlotResponse>> GetByStationAsync(string stationId)
     {
         var slots = await _db.Slots.Find(s => s.StationId == stationId).SortBy(s => s.StartTime).ToListAsync();
+        return slots.Select(ToResponse).ToList();
+    }
+
+    // Returns only unbooked future slots within seven days after confirming the station is active.
+    public async Task<List<SlotResponse>> GetAvailableByStationAsync(string stationId)
+    {
+        await GetActiveStationOrThrowAsync(stationId);
+
+        var now = DateTime.UtcNow;
+        var sevenDaysFromNow = now.AddDays(7);
+        var filter = Builders<EnergyBookingSlot>.Filter.And(
+            Builders<EnergyBookingSlot>.Filter.Eq(slot => slot.StationId, stationId),
+            Builders<EnergyBookingSlot>.Filter.Eq(slot => slot.IsBooked, false),
+            Builders<EnergyBookingSlot>.Filter.Gt(slot => slot.StartTime, now),
+            Builders<EnergyBookingSlot>.Filter.Lte(slot => slot.StartTime, sevenDaysFromNow));
+
+        var slots = await _db.Slots.Find(filter).SortBy(slot => slot.StartTime).ToListAsync();
         return slots.Select(ToResponse).ToList();
     }
 
