@@ -13,4 +13,5 @@ namespace SmartMicrogrid.API.Services;
 public interface IMongoDbService
 {
     IMongoCollection<User> Users { get; }
+    IMongoCollection<Prosumer> Prosumers { get; }
 }

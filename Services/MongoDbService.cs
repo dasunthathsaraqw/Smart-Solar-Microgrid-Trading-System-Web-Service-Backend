@@ -15,12 +15,14 @@ namespace SmartMicrogrid.API.Services;
 public class MongoDbService : IMongoDbService
 {
     public IMongoCollection<User> Users { get; }
+    public IMongoCollection<Prosumer> Prosumers { get; }
 
-    // Opens the MongoDB Atlas connection and binds the Users collection using the bound settings.
+    // Opens the MongoDB connection and binds the collections used by the application.
     public MongoDbService(IOptions<MongoDbSettings> settings)
     {
         var client = new MongoClient(settings.Value.ConnectionString);
         var database = client.GetDatabase(settings.Value.DatabaseName);
         Users = database.GetCollection<User>("Users");
+        Prosumers = database.GetCollection<Prosumer>("Prosumers");
     }
 }
