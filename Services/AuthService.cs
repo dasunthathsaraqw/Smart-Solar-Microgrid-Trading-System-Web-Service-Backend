@@ -16,6 +16,7 @@ public class AuthService : IAuthService
     private readonly IPasswordHasher _passwordHasher;
     private readonly IJwtService _jwtService;
 
+    // Initializes authentication with the credential store, password verifier and token issuer.
     public AuthService(IMongoDbService db, IPasswordHasher passwordHasher, IJwtService jwtService)
     {
         _db = db;
@@ -23,25 +24,30 @@ public class AuthService : IAuthService
         _jwtService = jwtService;
     }
 
-    // Validates the given email/password against MongoDB and returns a signed JWT on success, null otherwise.
-    public async Task<LoginResponse?> LoginAsync(LoginRequest request)
+    // Validates credentials before reporting inactive accounts, avoiding an email-enumeration signal for wrong passwords.
+    public async Task<(LoginResponse? Response, bool AccountInactive)> LoginAsync(LoginRequest request)
     {
-        var user = await _db.Users.Find(u => u.Email == request.Email && u.IsActive).FirstOrDefaultAsync();
+        var user = await _db.Users.Find(u => u.Email == request.Email).FirstOrDefaultAsync();
         if (user is null || !_passwordHasher.Verify(request.Password, user.PasswordHash))
         {
-            return null;
+            return (null, false);
+        }
+
+        if (!user.IsActive)
+        {
+            return (null, true);
         }
 
         var (token, expiresAt) = _jwtService.GenerateToken(user);
 
-        return new LoginResponse
+        return (new LoginResponse
         {
             Token = token,
             Name = user.Name,
             Email = user.Email,
             Role = user.Role,
             ExpiresAt = expiresAt,
-        };
+        }, false);
     }
 
     // Looks up a user by their MongoDB ObjectId string, used to resolve the "current user" from JWT claims.

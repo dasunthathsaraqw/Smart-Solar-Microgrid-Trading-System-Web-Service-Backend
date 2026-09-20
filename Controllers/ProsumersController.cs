@@ -20,6 +20,7 @@ public class ProsumersController : ControllerBase
 {
     private readonly IProsumerService _prosumerService;
 
+    // Initializes the Backoffice prosumer endpoints with their service-layer workflow.
     public ProsumersController(IProsumerService prosumerService)
     {
         _prosumerService = prosumerService;
@@ -38,6 +39,14 @@ public class ProsumersController : ControllerBase
     public async Task<IActionResult> GetPending()
     {
         var prosumers = await _prosumerService.GetAllAsync("pending");
+        return Ok(prosumers);
+    }
+
+    // Handles GET /api/prosumers/pending-deactivations for Backoffice review of active requesters.
+    [HttpGet("pending-deactivations")]
+    public async Task<IActionResult> GetPendingDeactivations()
+    {
+        var prosumers = await _prosumerService.GetPendingDeactivationsAsync();
         return Ok(prosumers);
     }
 

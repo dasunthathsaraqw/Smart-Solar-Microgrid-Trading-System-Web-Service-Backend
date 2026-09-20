@@ -11,6 +11,9 @@ namespace SmartMicrogrid.API.Services;
 
 public interface IAuthService
 {
-    Task<LoginResponse?> LoginAsync(LoginRequest request);
+    // Validates credentials and distinguishes an inactive account from invalid credentials.
+    Task<(LoginResponse? Response, bool AccountInactive)> LoginAsync(LoginRequest request);
+
+    // Finds the credential account represented by a JWT subject identifier.
     Task<User?> GetByIdAsync(string id);
 }
