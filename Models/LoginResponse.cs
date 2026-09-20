@@ -1,7 +1,7 @@
 /**
  * File: LoginResponse.cs
  * Purpose: Response payload returned after a successful login (JWT + user info).
- * Author: <Your Name>
+ * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
 
