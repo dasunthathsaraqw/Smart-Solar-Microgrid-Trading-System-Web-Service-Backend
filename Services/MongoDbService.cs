@@ -16,6 +16,8 @@ public class MongoDbService : IMongoDbService
 {
     public IMongoCollection<User> Users { get; }
     public IMongoCollection<Prosumer> Prosumers { get; }
+    public IMongoCollection<SolarStationInfo> Stations { get; }
+    public IMongoCollection<EnergyReservation> Reservations { get; }
 
     // Opens the MongoDB connection and binds the collections used by the application.
     public MongoDbService(IOptions<MongoDbSettings> settings)
@@ -24,5 +26,7 @@ public class MongoDbService : IMongoDbService
         var database = client.GetDatabase(settings.Value.DatabaseName);
         Users = database.GetCollection<User>("Users");
         Prosumers = database.GetCollection<Prosumer>("Prosumers");
+        Stations = database.GetCollection<SolarStationInfo>("SolarStationInfo");
+        Reservations = database.GetCollection<EnergyReservation>("EnergyReservation");
     }
 }
