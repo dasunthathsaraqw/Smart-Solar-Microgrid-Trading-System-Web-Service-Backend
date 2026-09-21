@@ -24,6 +24,7 @@ public class ReservationService : IReservationService
 
     private readonly IMongoDbService _db;
 
+    // Initializes reservation operations with MongoDB collections.
     public ReservationService(IMongoDbService db)
     {
         _db = db;
@@ -59,6 +60,31 @@ public class ReservationService : IReservationService
     {
         var reservation = await _db.Reservations.Find(r => r.Id == id).FirstOrDefaultAsync();
         return reservation is null ? null : ToResponse(reservation);
+    }
+
+    // Restricts the existing reservation list to a signed-in prosumer's NIC and optional status.
+    public Task<List<ReservationResponse>> GetByProsumerAsync(string prosumerNic, string? status)
+    {
+        return GetAllAsync(status, null, prosumerNic);
+    }
+
+    // Checks a reservation ID and NIC together so ownership failures have one indistinguishable result.
+    public async Task<bool> IsOwnedByAsync(string reservationId, string prosumerNic)
+    {
+        if (!ObjectId.TryParse(reservationId, out _))
+        {
+            return false;
+        }
+
+        return await _db.Reservations.Find(reservation =>
+            reservation.Id == reservationId && reservation.ProsumerNic == prosumerNic).AnyAsync();
+    }
+
+    // Ignores the client-supplied NIC and delegates the booking to the existing rule-enforcing method.
+    public Task<ReservationResponse> CreateForProsumerAsync(CreateReservationRequest request, string prosumerNic)
+    {
+        request.ProsumerNic = prosumerNic;
+        return CreateAsync(request, prosumerNic);
     }
 
     // Books a slot for a prosumer after validating the prosumer, station, slot and 7-day window.
@@ -450,6 +476,40 @@ public class ReservationService : IReservationService
             TotalPages = totalPages,
             HasNextPage = page < totalPages,
             HasPreviousPage = page > 1,
+        };
+    }
+
+    // Prevents cross-account search by replacing the NIC and clearing the optional name filter.
+    public Task<PagedResult<ReservationResponse>> SearchForProsumerAsync(
+        string prosumerNic,
+        ReservationSearchRequest request)
+    {
+        request.ProsumerNic = prosumerNic;
+        request.ProsumerName = null;
+        return SearchAsync(request);
+    }
+
+    // Computes confirmation text and modifiability from the actual slot time and final status.
+    public ReservationActionResponse CreateActionResponse(ReservationResponse reservation, string action)
+    {
+        var message = action switch
+        {
+            "Created" => "Reservation created successfully.",
+            "Updated" => "Reservation updated successfully.",
+            "Cancelled" => "Reservation cancelled successfully.",
+            _ => throw new InvalidOperationException("Unsupported reservation action."),
+        };
+
+        var exactHoursUntilSlot = (reservation.SlotStartTime - DateTime.UtcNow).TotalHours;
+        var roundedHoursUntilSlot = Math.Round(exactHoursUntilSlot, 1, MidpointRounding.AwayFromZero);
+
+        return new ReservationActionResponse
+        {
+            Action = action,
+            Reservation = reservation,
+            Message = message,
+            HoursUntilSlot = roundedHoursUntilSlot,
+            CanStillModify = reservation.Status == "Pending" && exactHoursUntilSlot >= TwelveHours.TotalHours,
         };
     }
 
