@@ -17,4 +17,7 @@ public interface IMongoDbService
     IMongoCollection<SolarStationInfo> Stations { get; }
     IMongoCollection<EnergyReservation> Reservations { get; }
     IMongoCollection<EnergyBookingSlot> Slots { get; }
+
+    // Pings the configured MongoDB database to verify connectivity.
+    Task PingAsync();
 }

@@ -132,7 +132,14 @@ public class StationService : IStationService
             CreatedBy = createdBy,
         };
 
-        await _db.Stations.InsertOneAsync(station);
+        try
+        {
+            await _db.Stations.InsertOneAsync(station);
+        }
+        catch (MongoWriteException ex) when (ex.WriteError.Code == 11000)
+        {
+            throw new InvalidOperationException("Station name already exists", ex);
+        }
         return ToResponse(station);
     }
 
@@ -187,7 +194,14 @@ public class StationService : IStationService
         if (updates.Count > 0)
         {
             updates.Add(Builders<SolarStationInfo>.Update.Set(s => s.UpdatedAt, DateTime.UtcNow));
-            await _db.Stations.UpdateOneAsync(s => s.Id == id, Builders<SolarStationInfo>.Update.Combine(updates));
+            try
+            {
+                await _db.Stations.UpdateOneAsync(s => s.Id == id, Builders<SolarStationInfo>.Update.Combine(updates));
+            }
+            catch (MongoWriteException ex) when (ex.WriteError.Code == 11000)
+            {
+                throw new InvalidOperationException("Station name already exists", ex);
+            }
         }
 
         var updated = await _db.Stations.Find(s => s.Id == id).FirstOrDefaultAsync();

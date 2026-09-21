@@ -15,6 +15,11 @@ using SmartMicrogrid.API.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// IIS app-pool identities may not write Windows EventLog; Console and Debug are safe defaults.
+builder.Logging.ClearProviders();
+builder.Logging.AddConsole();
+builder.Logging.AddDebug();
+
 // Bind strongly-typed configuration sections.
 builder.Services.Configure<MongoDbSettings>(builder.Configuration.GetSection("MongoDB"));
 builder.Services.Configure<JwtSettings>(builder.Configuration.GetSection("Jwt"));
@@ -38,17 +43,22 @@ builder.Services.AddControllers().AddJsonOptions(options =>
     options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
 });
 
-// CORS: allow any origin for local development. Restrict this to the deployed frontend origin in production.
+// CORS applies to browser frontends only; native Android requests do not require their phone IP here.
+var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>
     {
-        policy.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader();
+        policy.WithOrigins(allowedOrigins).AllowAnyMethod().AllowAnyHeader();
     });
 });
 
 // JWT bearer authentication configured from the bound Jwt settings.
 var jwtSettings = builder.Configuration.GetSection("Jwt").Get<JwtSettings>() ?? new JwtSettings();
+if (jwtSettings.Key == "REPLACE_WITH_YOUR_OWN_SECRET_AT_LEAST_32_CHARS_LONG" || jwtSettings.Key.Length < 32)
+{
+    throw new InvalidOperationException("Jwt:Key must be a private value of at least 32 characters. Set it with dotnet user-secrets set \"Jwt:Key\" <key> or the Jwt__Key environment variable.");
+}
 builder.Services.AddAuthentication(options =>
 {
     options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
@@ -75,6 +85,19 @@ builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
 
+// Log unexpected failures server-side while returning a stable, non-sensitive JSON response.
+app.UseExceptionHandler(errorApp =>
+{
+    errorApp.Run(async context =>
+    {
+        var exception = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>()?.Error;
+        var logger = context.RequestServices.GetRequiredService<ILogger<Program>>();
+        logger.LogError(exception, "Unhandled request failure for trace {TraceId}", context.TraceIdentifier);
+        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+        await context.Response.WriteAsJsonAsync(new { error = "An unexpected error occurred", traceId = context.TraceIdentifier });
+    });
+});
+
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
@@ -82,7 +105,11 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.UseHttpsRedirection();
+// LAN Android clients can use plain HTTP when TLS has not been provisioned on IIS.
+if (builder.Configuration.GetValue<bool>("Hosting:UseHttpsRedirection"))
+{
+    app.UseHttpsRedirection();
+}
 
 app.UseCors("AllowFrontend");
 
@@ -101,6 +128,7 @@ using (var scope = app.Services.CreateScope())
         var db = scope.ServiceProvider.GetRequiredService<IMongoDbService>();
         var passwordHasher = scope.ServiceProvider.GetRequiredService<IPasswordHasher>();
         await DbSeeder.SeedAsync(db, passwordHasher);
+        await MongoIndexSeeder.CreateAsync(db, app.Logger);
     }
     catch (Exception ex)
     {
