@@ -10,5 +10,6 @@ namespace SmartMicrogrid.API.Services;
 
 public class ReservationConflictException : Exception
 {
+    // Creates a conflict exception with a client-safe explanation.
     public ReservationConflictException(string message) : base(message) { }
 }

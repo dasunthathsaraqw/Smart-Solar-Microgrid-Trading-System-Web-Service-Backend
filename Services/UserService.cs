@@ -22,6 +22,7 @@ public class UserService : IUserService
     private readonly IMongoDbService _db;
     private readonly IPasswordHasher _passwordHasher;
 
+    // Initializes user operations with database access and password hashing.
     public UserService(IMongoDbService db, IPasswordHasher passwordHasher)
     {
         _db = db;

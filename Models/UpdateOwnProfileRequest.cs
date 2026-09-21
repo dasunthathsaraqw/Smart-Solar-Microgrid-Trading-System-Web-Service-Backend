@@ -1,7 +1,7 @@
 /**
  * File: UpdateOwnProfileRequest.cs
  * Purpose: Request payload for a prosumer to update only their editable profile fields.
- * Author: AUTHOR_NAME AUTHOR_IT_NUMBER
+ * Author: M.K.E Dharmarathne it23142732
  * Date: 2026
  */
 

@@ -1,7 +1,7 @@
 /**
  * File: ChangePasswordRequest.cs
  * Purpose: Request payload for an authenticated prosumer password change.
- * Author: AUTHOR_NAME AUTHOR_IT_NUMBER
+ * Author: M.K.E Dharmarathne it23142732
  * Date: 2026
  */
 

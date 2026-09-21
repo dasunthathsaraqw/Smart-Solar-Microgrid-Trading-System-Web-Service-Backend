@@ -1,7 +1,7 @@
 /**
  * File: OperatorDashboardResponse.cs
  * Purpose: Live UTC-day activity and upcoming approved bookings for an operator dashboard.
- * Author: AUTHOR_NAME AUTHOR_IT_NUMBER
+ * Author: M.K.E Dharmarathne it23142732
  * Date: 2026
  */
 

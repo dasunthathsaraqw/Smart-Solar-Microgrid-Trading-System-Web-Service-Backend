@@ -1,7 +1,7 @@
 /**
  * File: RegisterProsumerRequest.cs
  * Purpose: Request payload for mobile prosumer self-registration.
- * Author: AUTHOR_NAME AUTHOR_IT_NUMBER
+ * Author: M.K.E Dharmarathne it23142732
  * Date: 2026
  */
 

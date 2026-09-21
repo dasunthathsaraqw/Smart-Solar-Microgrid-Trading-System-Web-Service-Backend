@@ -10,5 +10,6 @@ namespace SmartMicrogrid.API.Services;
 
 public class SlotOverlapException : Exception
 {
+    // Creates an exception for overlapping station slots.
     public SlotOverlapException(string message) : base(message) { }
 }
