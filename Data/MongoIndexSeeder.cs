@@ -1,10 +1,11 @@
 /**
  * File: MongoIndexSeeder.cs
- * Purpose: Adds unique database indexes to backstop application-level duplicate checks.
+ * Purpose: Adds database indexes that enforce uniqueness and optimize application query patterns.
  * Author: M.K.E Dharmarathne it23142732
  * Date: 2026
  */
 
+using MongoDB.Bson;
 using MongoDB.Driver;
 using SmartMicrogrid.API.Services;
 using SmartMicrogrid.API.Models;
@@ -13,7 +14,7 @@ namespace SmartMicrogrid.API.Data;
 
 public static class MongoIndexSeeder
 {
-    // Creates each unique index independently so duplicates in one collection do not block others.
+    // Creates each index independently so a conflict in one collection does not block others.
     public static async Task CreateAsync(IMongoDbService db, ILogger logger)
     {
         try
@@ -47,6 +48,53 @@ public static class MongoIndexSeeder
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Could not create unique index on SolarStationInfo.stationName; check for duplicate values");
+        }
+
+        try
+        {
+            await db.Reservations.Indexes.CreateOneAsync(new CreateIndexModel<EnergyReservation>(
+                Builders<EnergyReservation>.IndexKeys.Ascending(reservation => reservation.QrToken),
+                new CreateIndexOptions<EnergyReservation>
+                {
+                    Name = "ux_reservations_qrToken_string",
+                    Unique = true,
+                    PartialFilterExpression = Builders<EnergyReservation>.Filter.Type(
+                        reservation => reservation.QrToken,
+                        BsonType.String),
+                }));
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not create unique partial index on EnergyReservation.qrToken; check for duplicate string values");
+        }
+
+        try
+        {
+            var keys = Builders<EnergyReservation>.IndexKeys
+                .Ascending(reservation => reservation.Status)
+                .Descending(reservation => reservation.CompletedAt);
+            await db.Reservations.Indexes.CreateOneAsync(new CreateIndexModel<EnergyReservation>(
+                keys,
+                new CreateIndexOptions { Name = "ix_reservations_status_completedAt" }));
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not create EnergyReservation status/completedAt index");
+        }
+
+        try
+        {
+            var keys = Builders<EnergyReservation>.IndexKeys
+                .Ascending(reservation => reservation.StationId)
+                .Ascending(reservation => reservation.Status)
+                .Descending(reservation => reservation.CompletedAt);
+            await db.Reservations.Indexes.CreateOneAsync(new CreateIndexModel<EnergyReservation>(
+                keys,
+                new CreateIndexOptions { Name = "ix_reservations_stationId_status_completedAt" }));
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not create EnergyReservation stationId/status/completedAt index");
         }
     }
 }
