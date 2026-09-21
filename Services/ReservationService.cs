@@ -557,7 +557,7 @@ public class ReservationService : IReservationService
     }
 
     // Generates a 64-character hex QR token from two concatenated GUIDs.
-    private static string GenerateQrToken()
+    internal static string GenerateQrToken()
     {
         return Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
     }

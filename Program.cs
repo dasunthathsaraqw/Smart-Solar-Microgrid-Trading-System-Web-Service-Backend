@@ -129,6 +129,10 @@ using (var scope = app.Services.CreateScope())
         var passwordHasher = scope.ServiceProvider.GetRequiredService<IPasswordHasher>();
         await DbSeeder.SeedAsync(db, passwordHasher);
         await MongoIndexSeeder.CreateAsync(db, app.Logger);
+        if (builder.Configuration.GetValue<bool>("Seeding:SeedSampleData"))
+        {
+            await SampleDataSeeder.SeedAsync(db, passwordHasher);
+        }
     }
     catch (Exception ex)
     {
