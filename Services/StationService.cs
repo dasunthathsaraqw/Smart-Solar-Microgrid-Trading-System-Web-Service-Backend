@@ -307,7 +307,7 @@ public class StationService : IStationService
     }
 
     // Calculates great-circle distance between two latitude/longitude points with the haversine formula.
-    private static double CalculateDistanceKm(
+    internal static double CalculateDistanceKm(
         double originLatitude,
         double originLongitude,
         double destinationLatitude,
