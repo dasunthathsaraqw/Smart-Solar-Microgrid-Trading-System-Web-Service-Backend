@@ -53,6 +53,32 @@ public class ReservationsController : ControllerBase
         }
     }
 
+    // Handles GET /api/reservations/operator/history for completed Grid Operator transaction history.
+    [HttpGet("operator/history")]
+    [Authorize(Roles = "GridOperator")]
+    public async Task<IActionResult> GetOperatorTransactionHistory(
+        [FromQuery] string? stationId,
+        [FromQuery] DateTime? dateFrom,
+        [FromQuery] DateTime? dateTo,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 10)
+    {
+        try
+        {
+            var result = await _reservationService.GetOperatorTransactionHistoryAsync(
+                stationId,
+                dateFrom,
+                dateTo,
+                page,
+                pageSize);
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
     // Handles GET /api/reservations/{id} — returns a single reservation by id.
     [HttpGet("{id}")]
     [Authorize(Roles = "Backoffice,GridOperator")]
