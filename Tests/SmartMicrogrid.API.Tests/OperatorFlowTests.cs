@@ -7,6 +7,7 @@
 
 using System.Net;
 using System.Net.Http.Json;
+using MongoDB.Driver;
 using SmartMicrogrid.API.Models;
 using SmartMicrogrid.API.Tests.Infrastructure;
 using Xunit;
@@ -16,12 +17,150 @@ namespace SmartMicrogrid.API.Tests;
 [Collection("Api")]
 public sealed class OperatorFlowTests
 {
+    private readonly ApiFactory _factory;
     private readonly TestHelpers _helpers;
 
     // Initializes operator-flow tests against the shared disposable API database.
     public OperatorFlowTests(ApiFactory factory)
     {
+        _factory = factory;
         _helpers = new TestHelpers(factory);
+    }
+
+    // Rule: operator history includes only completed transactions and honors station, date, order and paging filters.
+    [Fact]
+    public async Task OperatorHistory_CompletedTransactions_AreFilteredSortedAndPaged()
+    {
+        using var admin = await _helpers.LoginAsync("admin@smartsolar.com", "Admin@123");
+        var operatorAccount = await _helpers.CreateGridOperatorAsync(admin);
+        var prosumer = await _helpers.RegisterAndApproveProsumerAsync(admin);
+        using var operatorClient = operatorAccount.Client;
+        using var prosumerClient = prosumer.Client;
+        var station = await _helpers.CreateStationAsync(admin);
+        var otherStation = await _helpers.CreateStationAsync(admin);
+
+        var olderCompleted = await CreateReservationWithStatusAsync(admin, prosumerClient, station.Id, 2, "Completed");
+        var newerCompleted = await CreateReservationWithStatusAsync(admin, prosumerClient, station.Id, 3, "Completed");
+        await CreateReservationWithStatusAsync(admin, prosumerClient, station.Id, 4, "Pending");
+        await CreateReservationWithStatusAsync(admin, prosumerClient, station.Id, 5, "Approved");
+        await CreateReservationWithStatusAsync(admin, prosumerClient, station.Id, 6, "Cancelled");
+        await CreateReservationWithStatusAsync(admin, prosumerClient, otherStation.Id, 7, "Completed");
+
+        var now = DateTime.UtcNow;
+        var olderCompletedAt = now.AddDays(-4);
+        var newerCompletedAt = now.AddDays(-2);
+        var reservations = _factory.Database.GetCollection<EnergyReservation>("EnergyReservation");
+        await reservations.UpdateOneAsync(
+            reservation => reservation.Id == olderCompleted.Id,
+            Builders<EnergyReservation>.Update.Set(reservation => reservation.CompletedAt, olderCompletedAt));
+        await reservations.UpdateOneAsync(
+            reservation => reservation.Id == newerCompleted.Id,
+            Builders<EnergyReservation>.Update.Set(reservation => reservation.CompletedAt, newerCompletedAt));
+
+        var history = await operatorClient.GetFromJsonAsync<PagedResult<ReservationResponse>>(
+            $"/api/reservations/operator/history?stationId={station.Id}");
+        Assert.NotNull(history);
+        Assert.Equal(2, history.TotalCount);
+        Assert.All(history.Items, item => Assert.Equal("Completed", item.Status));
+        Assert.Equal(new[] { newerCompleted.Id, olderCompleted.Id }, history.Items.Select(item => item.Id));
+
+        var dateFrom = Uri.EscapeDataString(now.AddDays(-3).ToString("O"));
+        var dateTo = Uri.EscapeDataString(now.AddDays(-1).ToString("O"));
+        var dateFiltered = await operatorClient.GetFromJsonAsync<PagedResult<ReservationResponse>>(
+            $"/api/reservations/operator/history?stationId={station.Id}&dateFrom={dateFrom}&dateTo={dateTo}");
+        Assert.NotNull(dateFiltered);
+        Assert.Single(dateFiltered.Items);
+        Assert.Equal(newerCompleted.Id, dateFiltered.Items[0].Id);
+
+        var firstPage = await operatorClient.GetFromJsonAsync<PagedResult<ReservationResponse>>(
+            $"/api/reservations/operator/history?stationId={station.Id}&page=1&pageSize=1");
+        var secondPage = await operatorClient.GetFromJsonAsync<PagedResult<ReservationResponse>>(
+            $"/api/reservations/operator/history?stationId={station.Id}&page=2&pageSize=1");
+        Assert.NotNull(firstPage);
+        Assert.NotNull(secondPage);
+        Assert.Equal(newerCompleted.Id, Assert.Single(firstPage.Items).Id);
+        Assert.Equal(olderCompleted.Id, Assert.Single(secondPage.Items).Id);
+        Assert.True(firstPage.HasNextPage);
+        Assert.True(secondPage.HasPreviousPage);
+    }
+
+    // Rule: transaction history is strictly GridOperator-only.
+    [Fact]
+    public async Task OperatorHistory_ProsumerBackofficeOrAnonymous_IsRejected()
+    {
+        using var admin = await _helpers.LoginAsync("admin@smartsolar.com", "Admin@123");
+        var prosumer = await _helpers.RegisterAndApproveProsumerAsync(admin);
+        using var prosumerClient = prosumer.Client;
+        using var anonymousClient = _factory.CreateClient();
+
+        var prosumerResponse = await prosumerClient.GetAsync("/api/reservations/operator/history");
+        var backofficeResponse = await admin.GetAsync("/api/reservations/operator/history");
+        var anonymousResponse = await anonymousClient.GetAsync("/api/reservations/operator/history");
+
+        Assert.Equal(HttpStatusCode.Forbidden, prosumerResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, backofficeResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymousResponse.StatusCode);
+    }
+
+    // Rule: invalid paging, date ranges and station filters return BadRequest, while no matches return an empty page.
+    [Fact]
+    public async Task OperatorHistory_ValidationAndEmptyResults_FollowApiConventions()
+    {
+        using var admin = await _helpers.LoginAsync("admin@smartsolar.com", "Admin@123");
+        var operatorAccount = await _helpers.CreateGridOperatorAsync(admin);
+        using var operatorClient = operatorAccount.Client;
+        var emptyStation = await _helpers.CreateStationAsync(admin);
+
+        Assert.Equal(HttpStatusCode.BadRequest,
+            (await operatorClient.GetAsync("/api/reservations/operator/history?page=0")).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest,
+            (await operatorClient.GetAsync("/api/reservations/operator/history?pageSize=101")).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest,
+            (await operatorClient.GetAsync("/api/reservations/operator/history?dateFrom=2026-02-02&dateTo=2026-02-01")).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest,
+            (await operatorClient.GetAsync("/api/reservations/operator/history?stationId=not-an-object-id")).StatusCode);
+
+        var empty = await operatorClient.GetFromJsonAsync<PagedResult<ReservationResponse>>(
+            $"/api/reservations/operator/history?stationId={emptyStation.Id}");
+        Assert.NotNull(empty);
+        Assert.Empty(empty.Items);
+        Assert.Equal(0, empty.TotalCount);
+        Assert.Equal(0, empty.TotalPages);
+    }
+
+    // Creates a reservation through public APIs and advances it to the requested lifecycle status.
+    private async Task<ReservationResponse> CreateReservationWithStatusAsync(
+        HttpClient admin,
+        HttpClient prosumer,
+        string stationId,
+        double hoursAhead,
+        string status)
+    {
+        var slot = await _helpers.CreateSlotAsync(admin, stationId, hoursAhead);
+        var booking = await _helpers.BookAsync(prosumer, stationId, slot.Id);
+
+        if (status is "Approved" or "Completed")
+        {
+            await _helpers.ApproveAsync(admin, booking.Reservation.Id);
+        }
+
+        if (status == "Completed")
+        {
+            var completion = await admin.PutAsync($"/api/reservations/{booking.Reservation.Id}/complete", null);
+            Assert.Equal(HttpStatusCode.OK, completion.StatusCode);
+        }
+        else if (status == "Cancelled")
+        {
+            var cancellation = await admin.PutAsJsonAsync(
+                $"/api/reservations/{booking.Reservation.Id}/cancel",
+                new { reason = "Operator history test" });
+            Assert.Equal(HttpStatusCode.OK, cancellation.StatusCode);
+        }
+
+        var response = await admin.GetFromJsonAsync<ReservationResponse>($"/api/reservations/{booking.Reservation.Id}");
+        Assert.NotNull(response);
+        Assert.Equal(status, response.Status);
+        return response;
     }
 
     // Rule: a valid operator scan completes an approved booking, frees the slot and rejects replay.

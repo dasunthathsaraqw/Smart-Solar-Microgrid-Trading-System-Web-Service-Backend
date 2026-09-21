@@ -516,6 +516,77 @@ public class ReservationService : IReservationService
         };
     }
 
+    // Returns only Completed reservations for the operator transaction history, newest completion first.
+    public async Task<PagedResult<ReservationResponse>> GetOperatorTransactionHistoryAsync(
+        string? stationId,
+        DateTime? dateFrom,
+        DateTime? dateTo,
+        int page,
+        int pageSize)
+    {
+        if (page < 1)
+        {
+            throw new InvalidOperationException("Page must be 1 or greater");
+        }
+
+        if (pageSize < 1 || pageSize > 100)
+        {
+            throw new InvalidOperationException("PageSize must be between 1 and 100");
+        }
+
+        if (dateFrom.HasValue && dateTo.HasValue && dateFrom > dateTo)
+        {
+            throw new InvalidOperationException("DateFrom must not be after DateTo");
+        }
+
+        if (!string.IsNullOrWhiteSpace(stationId) &&
+            (!ObjectId.TryParse(stationId, out _) ||
+             !await _db.Stations.Find(station => station.Id == stationId).AnyAsync()))
+        {
+            throw new InvalidOperationException("Station not found");
+        }
+
+        var filters = new List<FilterDefinition<EnergyReservation>>
+        {
+            Builders<EnergyReservation>.Filter.Eq(reservation => reservation.Status, "Completed"),
+        };
+
+        if (!string.IsNullOrWhiteSpace(stationId))
+        {
+            filters.Add(Builders<EnergyReservation>.Filter.Eq(reservation => reservation.StationId, stationId));
+        }
+
+        if (dateFrom.HasValue)
+        {
+            filters.Add(Builders<EnergyReservation>.Filter.Gte(reservation => reservation.CompletedAt, dateFrom.Value));
+        }
+
+        if (dateTo.HasValue)
+        {
+            filters.Add(Builders<EnergyReservation>.Filter.Lte(reservation => reservation.CompletedAt, dateTo.Value));
+        }
+
+        var filter = Builders<EnergyReservation>.Filter.And(filters);
+        var totalCount = (int)await _db.Reservations.CountDocumentsAsync(filter);
+        var totalPages = totalCount == 0 ? 0 : (int)Math.Ceiling(totalCount / (double)pageSize);
+        var items = await _db.Reservations.Find(filter)
+            .SortByDescending(reservation => reservation.CompletedAt)
+            .Skip((page - 1) * pageSize)
+            .Limit(pageSize)
+            .ToListAsync();
+
+        return new PagedResult<ReservationResponse>
+        {
+            Items = items.Select(ToResponse).ToList(),
+            TotalCount = totalCount,
+            Page = page,
+            PageSize = pageSize,
+            TotalPages = totalPages,
+            HasNextPage = page < totalPages,
+            HasPreviousPage = page > 1,
+        };
+    }
+
     // Prevents cross-account search by replacing the NIC and clearing the optional name filter.
     public Task<PagedResult<ReservationResponse>> SearchForProsumerAsync(
         string prosumerNic,

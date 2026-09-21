@@ -62,6 +62,14 @@ public interface IReservationService
     // Searches reservations with management filters and pagination.
     Task<PagedResult<ReservationResponse>> SearchAsync(ReservationSearchRequest request);
 
+    // Lists completed energy transfers for Grid Operators with optional station/date filters and pagination.
+    Task<PagedResult<ReservationResponse>> GetOperatorTransactionHistoryAsync(
+        string? stationId,
+        DateTime? dateFrom,
+        DateTime? dateTo,
+        int page,
+        int pageSize);
+
     // Forces the authenticated prosumer's NIC into the existing paged search.
     Task<PagedResult<ReservationResponse>> SearchForProsumerAsync(string prosumerNic, ReservationSearchRequest request);
 
