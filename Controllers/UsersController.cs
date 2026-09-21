@@ -21,6 +21,7 @@ public class UsersController : ControllerBase
 {
     private readonly IUserService _userService;
 
+    // Initializes Backoffice user management with the user service.
     public UsersController(IUserService userService)
     {
         _userService = userService;

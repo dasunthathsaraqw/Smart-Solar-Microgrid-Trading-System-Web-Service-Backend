@@ -1,7 +1,7 @@
 /**
  * File: NearbyStationResponse.cs
  * Purpose: Station search result with distance and seven-day bookable-slot availability.
- * Author: AUTHOR_NAME AUTHOR_IT_NUMBER
+ * Author: M.K.E Dharmarathne it23142732
  * Date: 2026
  */
 

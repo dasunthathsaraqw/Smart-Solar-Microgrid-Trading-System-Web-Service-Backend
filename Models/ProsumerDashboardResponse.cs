@@ -1,7 +1,7 @@
 /**
  * File: ProsumerDashboardResponse.cs
  * Purpose: Live reservation counts and the next approved booking for a prosumer dashboard.
- * Author: AUTHOR_NAME AUTHOR_IT_NUMBER
+ * Author: M.K.E Dharmarathne it23142732
  * Date: 2026
  */
 

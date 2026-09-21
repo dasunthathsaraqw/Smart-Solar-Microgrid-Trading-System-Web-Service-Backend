@@ -1,65 +1,100 @@
-# Smart Solar Microgrid — Web Service Backend (Stage 1)
+# Smart Solar Microgrid Web Service Backend
 
-ASP.NET Core 10 Web API (controller-based) providing role-based authentication and
-Backoffice-only user management, backed by MongoDB Atlas.
+ASP.NET Core 10 controller API backed by MongoDB. JWT roles are Backoffice, GridOperator and Prosumer. Browser clients use configured CORS origins; native Android clients do not use CORS.
 
-## Endpoints
+## Local setup
 
-| Method | Route              | Auth                    | Purpose                          |
-|--------|--------------------|--------------------------|-----------------------------------|
-| POST   | `/api/auth/login`  | none                     | Login, returns JWT + user info    |
-| GET    | `/api/auth/me`     | any authenticated user   | Returns current user from claims  |
-| POST   | `/api/users`       | Backoffice only          | Create a Backoffice/GridOperator user |
-| GET    | `/api/users`       | Backoffice only          | List all users                    |
-| GET    | `/api/users/{id}`  | Backoffice only          | Get a single user                 |
-| PUT    | `/api/users/{id}`  | Backoffice only          | Update a user                     |
-| DELETE | `/api/users/{id}`  | Backoffice only          | Soft-delete (sets `isActive=false`) |
+Start MongoDB, then from this directory:
 
-## Setup
-
-```bash
-dotnet restore
+```powershell
+dotnet user-secrets set "Jwt:Key" "REPLACE_WITH_A_PRIVATE_RANDOM_KEY_AT_LEAST_32_CHARACTERS"
+dotnet user-secrets set "MongoDB:ConnectionString" "mongodb://localhost:27017/"
 dotnet run
 ```
 
-Swagger UI is available at `/swagger` in the Development environment.
-On first run, HTTPS uses ASP.NET Core's local dev certificate — trust it once with:
+Replace the example JWT value with your own random secret. The committed `appsettings.json` deliberately retains a public placeholder and localhost MongoDB URL; startup refuses the placeholder or any key shorter than 32 characters. User secrets are for local Development only. Swagger UI is at `/swagger` in Development. `Hosting:UseHttpsRedirection` defaults to false so Android devices can call an HTTP LAN binding without an untrusted-certificate redirect. Set it true only after configuring working TLS. Plain HTTP exposes passwords and tokens to others on the network; use trusted HTTPS outside a controlled demo LAN.
 
-```bash
-dotnet dev-certs https --trust
-```
+Optional demo data: set `Seeding__SeedSampleData=true` for the API process (or `Seeding:SeedSampleData` in local configuration). The seeder runs only when `SolarStationInfo` is empty. It adds seven stations (six active), 127 slots, five prosumers and four reservations. The normal admin seeder runs when Users is empty. Use a disposable MongoDB database when trying sample data.
 
-## Configuration
+| Account | Email | Password | State |
+|---|---|---|---|
+| Backoffice admin | `admin@smartsolar.com` | `Admin@123` | Active, seeded on empty Users |
+| Grid operator | `operator@smartsolar.com` | `Operator@123` | Active, sample data only |
+| Prosumer 1 | `prosumer1@smartsolar.com` | `Prosumer@123` | Active, sample data only |
+| Prosumer 2 | `prosumer2@smartsolar.com` | `Prosumer@123` | Active, sample data only |
+| Prosumer 3 | `prosumer3@smartsolar.com` | `Prosumer@123` | Active, sample data only |
+| Prosumer 4 | `prosumer4@smartsolar.com` | `Prosumer@123` | Pending approval; login returns 403 |
+| Prosumer 5 | `prosumer5@smartsolar.com` | `Prosumer@123` | Deactivated/requested; login returns 403 |
 
-`appsettings.json` contains:
+These are public demo credentials: never enable sample seeding against a production database. See [DEPLOYMENT.md](DEPLOYMENT.md) for IIS setup, secrets, LAN bindings and troubleshooting.
 
-- `MongoDB:ConnectionString` / `MongoDB:DatabaseName` — currently set to a local MongoDB
-  instance (`mongodb://localhost:27017/`) for development. Point this at your own local
-  MongoDB (e.g. via MongoDB Compass) or a working Atlas connection string.
-- `Jwt:Key` / `Jwt:Issuer` / `Jwt:Audience` / `Jwt:ExpiryMinutes` — JWT signing settings.
-  `Jwt:Key` in `appsettings.json` is a placeholder — it is **not** a real secret and the
-  app will refuse to sign tokens with it as-is.
+## Endpoints
 
-### Setting your own JWT secret locally
+`BO` = Backoffice, `GO` = GridOperator, `P` = Prosumer. All routes are relative to the API host. Query parameters are optional unless specified by a request model.
 
-The real signing key is kept out of source control. Create an `appsettings.Development.json`
-(gitignored) in this folder with your own key:
-
-```json
-{
-  "Jwt": {
-    "Key": "<any random string, at least 32 characters>"
-  }
-}
-```
-
-This overrides the placeholder in `appsettings.json` when `ASPNETCORE_ENVIRONMENT=Development`
-(the default for `dotnet run`). Do not commit this file or paste real keys into
-`appsettings.json`.
-
-## Seed data
-
-On first startup, if the `Users` collection is empty, a default Backoffice account is created:
-
-- Email: `admin@smartsolar.com`
-- Password: `Admin@123`
+| Method | Route | Roles | Purpose |
+|---|---|---|---|
+| POST | `/api/auth/login` | Anonymous | Validate credentials and issue JWT |
+| GET | `/api/auth/me` | Any authenticated | Return signed-in identity |
+| GET | `/api/health` | Anonymous | Ping MongoDB; 200 or 503 |
+| GET | `/api/users` | BO | List users, optionally by role/status |
+| GET | `/api/users/{id}` | BO | Get user |
+| POST | `/api/users` | BO | Create Backoffice or GridOperator |
+| PUT | `/api/users/{id}` | BO | Update user |
+| PUT | `/api/users/{id}/deactivate` | BO | Deactivate user |
+| PUT | `/api/users/{id}/reactivate` | BO | Reactivate user |
+| GET | `/api/prosumers` | BO | List prosumers by optional status |
+| GET | `/api/prosumers/pending` | BO | List awaiting approval |
+| GET | `/api/prosumers/pending-deactivations` | BO | List deactivation requests |
+| GET | `/api/prosumers/{nic}` | BO | Get prosumer by NIC |
+| POST | `/api/prosumers` | BO | Create pending prosumer |
+| PUT | `/api/prosumers/{nic}` | BO | Update prosumer |
+| PUT | `/api/prosumers/{nic}/deactivate` | BO | Deactivate prosumer |
+| PUT | `/api/prosumers/{nic}/reactivate` | BO | Approve or reactivate prosumer |
+| POST | `/api/prosumers/register` | Anonymous | Self-register pending prosumer and user |
+| GET | `/api/prosumers/me` | P | Get own profile |
+| PUT | `/api/prosumers/me` | P | Update own profile |
+| PUT | `/api/prosumers/me/password` | P | Change own password |
+| PUT | `/api/prosumers/me/request-deactivation` | P | Request own deactivation |
+| GET | `/api/stations` | BO, GO, P | List stations; non-BO sees active only |
+| GET | `/api/stations/{id}` | BO, GO, P | Get station; non-BO cannot see inactive |
+| GET | `/api/stations/nearby` | BO, GO, P | Nearby active stations with distance and slot count |
+| POST | `/api/stations` | BO | Create station |
+| PUT | `/api/stations/{id}` | BO | Update station |
+| PUT | `/api/stations/{id}/deactivate` | BO | Deactivate station |
+| PUT | `/api/stations/{id}/reactivate` | BO | Reactivate station |
+| GET | `/api/slots` | BO, GO | List slots with optional filters |
+| GET | `/api/slots/{id}` | BO, GO | Get slot |
+| GET | `/api/slots/station/{stationId}` | BO, GO | List station slots |
+| GET | `/api/slots/station/{stationId}/available` | BO, GO, P | List bookable slots in seven-day window |
+| POST | `/api/slots` | BO, GO | Create slot |
+| POST | `/api/slots/bulk` | BO, GO | Create a day's slots in bulk |
+| PUT | `/api/slots/{id}` | BO, GO | Update unbooked slot |
+| DELETE | `/api/slots/{id}` | BO, GO | Delete unbooked slot |
+| GET | `/api/reservations` | BO, GO | List reservations with filters |
+| POST | `/api/reservations/search` | BO, GO | Search/paginate reservations |
+| GET | `/api/reservations/{id}` | BO, GO | Get reservation |
+| POST | `/api/reservations` | BO, GO | Book a slot for a prosumer |
+| PUT | `/api/reservations/{id}` | BO, GO | Move pending reservation |
+| PUT | `/api/reservations/{id}/cancel` | BO, GO | Cancel reservation; BO can override notice rule |
+| PUT | `/api/reservations/{id}/approve` | BO, GO | Approve and issue QR token |
+| PUT | `/api/reservations/{id}/complete` | BO, GO | Complete and free slot |
+| GET | `/api/reservations/{id}/qr` | BO, GO | Get approved reservation QR token |
+| POST | `/api/reservations/verify-qr` | GO | Validate QR token at a station |
+| POST | `/api/reservations/scan-complete` | GO | Validate QR and complete atomically |
+| GET | `/api/reservations/my` | P | List own reservations |
+| POST | `/api/reservations/my/search` | P | Search own reservations |
+| GET | `/api/reservations/my/{id}` | P | Get owned reservation |
+| POST | `/api/reservations/my` | P | Book own slot |
+| PUT | `/api/reservations/my/{id}` | P | Move own pending reservation |
+| PUT | `/api/reservations/my/{id}/cancel` | P | Cancel own reservation |
+| GET | `/api/reservations/my/{id}/qr` | P | Get own approved QR token |
+| GET | `/api/reports/dashboard-summary` | BO, GO | Dashboard KPI summary |
+| GET | `/api/reports/reservations-by-status` | BO, GO | Reservation status chart |
+| GET | `/api/reports/reservations-per-day` | BO, GO | Daily reservation counts |
+| GET | `/api/reports/top-stations` | BO, GO | Top stations chart |
+| GET | `/api/reports/energy-traded` | BO, GO | Traded-energy chart |
+| GET | `/api/reports/recent-bookings` | BO, GO | Recent bookings |
+| GET | `/api/reports/pending-approvals` | BO, GO | Approval queue |
+| GET | `/api/reports/operator-dashboard` | BO, GO | Live operator dashboard |
+| GET | `/api/reports/my-dashboard` | P | Live own-prosumer dashboard |
