@@ -45,6 +45,11 @@ public interface IReservationService
     // Verifies a QR token at the point of energy transfer.
     Task<(bool Valid, ReservationResponse? Reservation, string? Error)> VerifyQrAsync(VerifyQrRequest request);
 
+    // Verifies a QR and conditionally completes its reservation once for an operator.
+    Task<(bool Success, ReservationResponse? Reservation, string? Error)> ScanAndCompleteAsync(
+        VerifyQrRequest request,
+        string completedBy);
+
     // Returns the QR token only for an approved reservation.
     Task<string?> GetQrTokenAsync(string reservationId);
 
