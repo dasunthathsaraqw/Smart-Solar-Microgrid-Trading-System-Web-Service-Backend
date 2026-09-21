@@ -128,7 +128,7 @@ public class ReservationsController : ControllerBase
     // Handles POST /api/reservations/my and returns a server-computed confirmation summary.
     [HttpPost("my")]
     [Authorize(Roles = "Prosumer")]
-    public async Task<IActionResult> CreateMine([FromBody] CreateReservationRequest request)
+    public async Task<IActionResult> CreateMine([FromBody] CreateOwnReservationRequest request)
     {
         var nic = GetTokenNic();
         if (nic is null)
@@ -138,7 +138,13 @@ public class ReservationsController : ControllerBase
 
         try
         {
-            var reservation = await _reservationService.CreateForProsumerAsync(request, nic);
+            var reservationRequest = new CreateReservationRequest
+            {
+                ProsumerNic = request.ProsumerNic ?? string.Empty,
+                StationId = request.StationId,
+                SlotId = request.SlotId,
+            };
+            var reservation = await _reservationService.CreateForProsumerAsync(reservationRequest, nic);
             var summary = _reservationService.CreateActionResponse(reservation, "Created");
             return CreatedAtAction(nameof(GetMineById), new { id = reservation.Id }, summary);
         }
