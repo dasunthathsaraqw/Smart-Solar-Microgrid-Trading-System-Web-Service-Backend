@@ -124,7 +124,7 @@ public class ReservationService : IReservationService
             throw new InvalidOperationException("Cannot book a past slot");
         }
 
-        if (slot.StartTime - now > SevenDays)
+        if (!IsWithinBookingWindow(slot.StartTime, now))
         {
             throw new InvalidOperationException("Reservations must be within 7 days");
         }
@@ -176,7 +176,7 @@ public class ReservationService : IReservationService
         }
 
         var now = DateTime.UtcNow;
-        if (reservation.SlotStartTime - now < TwelveHours)
+        if (!HasTwelveHoursNotice(reservation.SlotStartTime, now))
         {
             throw new InvalidOperationException("Updates require at least 12 hours' notice");
         }
@@ -202,7 +202,7 @@ public class ReservationService : IReservationService
             throw new InvalidOperationException("Cannot book a past slot");
         }
 
-        if (newSlot.StartTime - now > SevenDays)
+        if (!IsWithinBookingWindow(newSlot.StartTime, now))
         {
             throw new InvalidOperationException("Reservations must be within 7 days");
         }
@@ -242,7 +242,7 @@ public class ReservationService : IReservationService
         }
 
         var now = DateTime.UtcNow;
-        if (!allowOverride && reservation.SlotStartTime - now < TwelveHours)
+        if (!allowOverride && !HasTwelveHoursNotice(reservation.SlotStartTime, now))
         {
             throw new InvalidOperationException("Cancellations require at least 12 hours' notice");
         }
@@ -537,7 +537,8 @@ public class ReservationService : IReservationService
             _ => throw new InvalidOperationException("Unsupported reservation action."),
         };
 
-        var exactHoursUntilSlot = (reservation.SlotStartTime - DateTime.UtcNow).TotalHours;
+        var now = DateTime.UtcNow;
+        var exactHoursUntilSlot = HoursUntilSlot(reservation.SlotStartTime, now);
         var roundedHoursUntilSlot = Math.Round(exactHoursUntilSlot, 1, MidpointRounding.AwayFromZero);
 
         return new ReservationActionResponse
@@ -546,8 +547,32 @@ public class ReservationService : IReservationService
             Reservation = reservation,
             Message = message,
             HoursUntilSlot = roundedHoursUntilSlot,
-            CanStillModify = reservation.Status == "Pending" && exactHoursUntilSlot >= TwelveHours.TotalHours,
+            CanStillModify = CanStillModify(reservation, now),
         };
+    }
+
+    // Accepts future bookings through the exact seven-day boundary.
+    internal static bool IsWithinBookingWindow(DateTime slotStart, DateTime now)
+    {
+        return slotStart > now && slotStart - now <= SevenDays;
+    }
+
+    // Accepts modifications with at least twelve hours of notice.
+    internal static bool HasTwelveHoursNotice(DateTime slotStart, DateTime now)
+    {
+        return slotStart - now >= TwelveHours;
+    }
+
+    // Computes the unrounded number of hours until a slot for confirmation views.
+    internal static double HoursUntilSlot(DateTime slotStart, DateTime now)
+    {
+        return (slotStart - now).TotalHours;
+    }
+
+    // Allows only pending reservations with at least twelve hours left to be modified.
+    internal static bool CanStillModify(ReservationResponse reservation, DateTime now)
+    {
+        return reservation.Status == "Pending" && HasTwelveHoursNotice(reservation.SlotStartTime, now);
     }
 
     // Flips a slot's IsBooked flag; used whenever a reservation locks, frees, or moves slots.

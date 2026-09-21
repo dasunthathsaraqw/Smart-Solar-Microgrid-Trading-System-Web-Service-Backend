@@ -28,6 +28,27 @@ Optional demo data: set `Seeding__SeedSampleData=true` for the API process (or `
 
 These are public demo credentials: never enable sample seeding against a production database. See [DEPLOYMENT.md](DEPLOYMENT.md) for IIS setup, secrets, LAN bindings and troubleshooting.
 
+## Running the tests
+
+Prerequisite: A local MongoDB instance must be running (e.g. `mongodb://localhost:27017/`). Integration tests automatically create and clean up isolated test databases (`SmartSolarTests_*`).
+
+To execute the entire integration test suite from the solution root:
+
+```powershell
+dotnet test SmartMicrogrid.slnx
+```
+
+### Test Suite Summary
+
+- **PureRuleTests**: Proves pure unit logic including booking window boundary rules, twelve-hour notice rules, and Haversine distance calculation.
+- **StationManagementTests**: Proves Backoffice creation, updates, and activation/deactivation controls for solar charging stations.
+- **NearbyStationTests**: Proves location-based search and distance filtering for active charging stations.
+- **SlotAvailabilityTests**: Proves slot creation, status queries, and seven-day bookable slot availability logic.
+- **ProsumerAccountTests**: Proves prosumer registration, activation lifecycle, JWT NIC claims, profile self-service, password changes, and deactivation workflows.
+- **ReservationRuleTests**: Proves booking windows, notice rules, ownership isolation, body NIC forgery protection, and QR token lifecycles.
+- **OperatorFlowTests**: Proves GridOperator QR token scanning, atomic completion, slot freeing, replay prevention, station validation, concurrency protection, and role-based access control.
+- **DashboardTests**: Proves owner-scoped prosumer dashboard metrics and station-scoped GridOperator activity counters.
+
 ## Endpoints
 
 `BO` = Backoffice, `GO` = GridOperator, `P` = Prosumer. All routes are relative to the API host. Query parameters are optional unless specified by a request model.

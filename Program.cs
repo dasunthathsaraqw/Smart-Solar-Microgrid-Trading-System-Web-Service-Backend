@@ -141,3 +141,6 @@ using (var scope = app.Services.CreateScope())
 }
 
 app.Run();
+
+// Exposes the minimal-hosting entry point to WebApplicationFactory integration tests.
+public partial class Program { }

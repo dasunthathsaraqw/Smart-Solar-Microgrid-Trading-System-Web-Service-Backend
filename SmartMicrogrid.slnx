@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="SmartMicrogrid.API.csproj" />
+  <Project Path="Tests/SmartMicrogrid.API.Tests/SmartMicrogrid.API.Tests.csproj" />
+</Solution>
