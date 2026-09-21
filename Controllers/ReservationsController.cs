@@ -15,12 +15,14 @@ using SmartMicrogrid.API.Services;
 
 namespace SmartMicrogrid.API.Controllers;
 
+// Authorization remains per action because existing routes have different roles and class-level gates combine with them.
 [ApiController]
 [Route("api/reservations")]
 public class ReservationsController : ControllerBase
 {
     private readonly IReservationService _reservationService;
 
+    // Initializes the role-gated reservation endpoints with their business service.
     public ReservationsController(IReservationService reservationService)
     {
         _reservationService = reservationService;
@@ -65,15 +67,174 @@ public class ReservationsController : ControllerBase
         return Ok(reservation);
     }
 
-    // Handles GET /api/reservations/my — reserved for prosumer mobile login in a later stage;
-    // the Prosumer role cannot currently authenticate via this API, so this is unreachable today.
+    // Handles GET /api/reservations/my using the signed NIC claim and optional status filter.
     [HttpGet("my")]
     [Authorize(Roles = "Prosumer")]
-    public async Task<IActionResult> GetMine()
+    public async Task<IActionResult> GetMine([FromQuery] string? status)
     {
-        var nic = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? string.Empty;
-        var reservations = await _reservationService.GetAllAsync(null, null, nic);
+        var nic = GetTokenNic();
+        if (nic is null)
+        {
+            return Unauthorized(new { error = "The access token does not contain a NIC claim." });
+        }
+
+        var reservations = await _reservationService.GetByProsumerAsync(nic, status);
         return Ok(reservations);
+    }
+
+    // Handles POST /api/reservations/my/search while forcing search ownership to the signed NIC.
+    [HttpPost("my/search")]
+    [Authorize(Roles = "Prosumer")]
+    public async Task<IActionResult> SearchMine([FromBody] ReservationSearchRequest request)
+    {
+        var nic = GetTokenNic();
+        if (nic is null)
+        {
+            return Unauthorized(new { error = "The access token does not contain a NIC claim." });
+        }
+
+        try
+        {
+            var results = await _reservationService.SearchForProsumerAsync(nic, request);
+            return Ok(results);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    // Handles GET /api/reservations/my/{id} without revealing ownership of other reservations.
+    [HttpGet("my/{id}")]
+    [Authorize(Roles = "Prosumer")]
+    public async Task<IActionResult> GetMineById(string id)
+    {
+        var nic = GetTokenNic();
+        if (nic is null)
+        {
+            return Unauthorized(new { error = "The access token does not contain a NIC claim." });
+        }
+
+        // A 404 hides both nonexistent IDs and IDs owned by others; a 403 would disclose their existence.
+        if (!await _reservationService.IsOwnedByAsync(id, nic))
+        {
+            return NotFound();
+        }
+
+        var reservation = await _reservationService.GetByIdAsync(id);
+        return reservation is null ? NotFound() : Ok(reservation);
+    }
+
+    // Handles POST /api/reservations/my and returns a server-computed confirmation summary.
+    [HttpPost("my")]
+    [Authorize(Roles = "Prosumer")]
+    public async Task<IActionResult> CreateMine([FromBody] CreateReservationRequest request)
+    {
+        var nic = GetTokenNic();
+        if (nic is null)
+        {
+            return Unauthorized(new { error = "The access token does not contain a NIC claim." });
+        }
+
+        try
+        {
+            var reservation = await _reservationService.CreateForProsumerAsync(request, nic);
+            var summary = _reservationService.CreateActionResponse(reservation, "Created");
+            return CreatedAtAction(nameof(GetMineById), new { id = reservation.Id }, summary);
+        }
+        catch (ReservationConflictException ex)
+        {
+            return Conflict(new { error = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    // Handles PUT /api/reservations/my/{id} after a non-disclosing ownership check.
+    [HttpPut("my/{id}")]
+    [Authorize(Roles = "Prosumer")]
+    public async Task<IActionResult> UpdateMine(string id, [FromBody] UpdateReservationRequest request)
+    {
+        var nic = GetTokenNic();
+        if (nic is null)
+        {
+            return Unauthorized(new { error = "The access token does not contain a NIC claim." });
+        }
+
+        // A 404 hides both nonexistent IDs and IDs owned by others; a 403 would disclose their existence.
+        if (!await _reservationService.IsOwnedByAsync(id, nic))
+        {
+            return NotFound();
+        }
+
+        try
+        {
+            var reservation = await _reservationService.UpdateAsync(id, request, nic);
+            return reservation is null
+                ? NotFound()
+                : Ok(_reservationService.CreateActionResponse(reservation, "Updated"));
+        }
+        catch (ReservationConflictException ex)
+        {
+            return Conflict(new { error = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    // Handles PUT /api/reservations/my/{id}/cancel without allowing a notice-rule override.
+    [HttpPut("my/{id}/cancel")]
+    [Authorize(Roles = "Prosumer")]
+    public async Task<IActionResult> CancelMine(string id, [FromBody] CancelReservationRequest request)
+    {
+        var nic = GetTokenNic();
+        if (nic is null)
+        {
+            return Unauthorized(new { error = "The access token does not contain a NIC claim." });
+        }
+
+        // A 404 hides both nonexistent IDs and IDs owned by others; a 403 would disclose their existence.
+        if (!await _reservationService.IsOwnedByAsync(id, nic))
+        {
+            return NotFound();
+        }
+
+        try
+        {
+            var reservation = await _reservationService.CancelAsync(id, request, nic, allowOverride: false);
+            return reservation is null
+                ? NotFound()
+                : Ok(_reservationService.CreateActionResponse(reservation, "Cancelled"));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+    }
+
+    // Handles GET /api/reservations/my/{id}/qr only for an owned, approved reservation.
+    [HttpGet("my/{id}/qr")]
+    [Authorize(Roles = "Prosumer")]
+    public async Task<IActionResult> GetMineQr(string id)
+    {
+        var nic = GetTokenNic();
+        if (nic is null)
+        {
+            return Unauthorized(new { error = "The access token does not contain a NIC claim." });
+        }
+
+        // A 404 hides both nonexistent IDs and IDs owned by others; a 403 would disclose their existence.
+        if (!await _reservationService.IsOwnedByAsync(id, nic))
+        {
+            return NotFound();
+        }
+
+        var token = await _reservationService.GetQrTokenAsync(id);
+        return token is null ? NotFound() : Ok(new { qrToken = token });
     }
 
     // Handles POST /api/reservations — books a slot on behalf of a prosumer.
@@ -227,5 +388,12 @@ public class ReservationsController : ControllerBase
         }
 
         return Ok(reservation);
+    }
+
+    // Reads the authenticated prosumer's immutable NIC claim for self-service requests.
+    private string? GetTokenNic()
+    {
+        var nic = User.FindFirst("nic")?.Value;
+        return string.IsNullOrWhiteSpace(nic) ? null : nic;
     }
 }
