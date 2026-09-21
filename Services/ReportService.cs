@@ -7,6 +7,7 @@
  * Date: 2026
  */
 
+using MongoDB.Bson;
 using MongoDB.Driver;
 using SmartMicrogrid.API.Models;
 
@@ -16,6 +17,7 @@ public class ReportService : IReportService
 {
     private readonly IMongoDbService _db;
 
+    // Initializes report queries with access to the live MongoDB collections.
     public ReportService(IMongoDbService db)
     {
         _db = db;
@@ -140,6 +142,74 @@ public class ReportService : IReportService
         return reservations.Select(ToRecentBooking).ToList();
     }
 
+    // Aggregates one prosumer's statuses in one query, then finds their next future approved booking.
+    public async Task<ProsumerDashboardResponse> GetProsumerDashboardAsync(string prosumerNic)
+    {
+        var now = DateTime.UtcNow;
+        var statusCounts = await _db.Reservations.Aggregate()
+            .Match(reservation => reservation.ProsumerNic == prosumerNic)
+            .Group(reservation => reservation.Status, group => new
+            {
+                Status = group.Key,
+                Count = group.Count(),
+                FutureCount = group.Sum(reservation => reservation.SlotStartTime > now ? 1 : 0),
+            })
+            .ToListAsync();
+
+        var next = await _db.Reservations.Find(reservation =>
+                reservation.ProsumerNic == prosumerNic &&
+                reservation.Status == "Approved" &&
+                reservation.SlotStartTime > now)
+            .SortBy(reservation => reservation.SlotStartTime)
+            .FirstOrDefaultAsync();
+
+        return new ProsumerDashboardResponse
+        {
+            PendingCount = statusCounts.FirstOrDefault(group => group.Status == "Pending")?.Count ?? 0,
+            ApprovedFutureCount = statusCounts.FirstOrDefault(group => group.Status == "Approved")?.FutureCount ?? 0,
+            CompletedCount = statusCounts.FirstOrDefault(group => group.Status == "Completed")?.Count ?? 0,
+            CancelledCount = statusCounts.FirstOrDefault(group => group.Status == "Cancelled")?.Count ?? 0,
+            NextReservation = next is null ? null : ToReservationResponse(next),
+        };
+    }
+
+    // Counts current-UTC-day activity and upcoming approved bookings for an optional station scope.
+    public async Task<OperatorDashboardResponse> GetOperatorDashboardAsync(string? stationId)
+    {
+        if (!string.IsNullOrWhiteSpace(stationId) &&
+            (!ObjectId.TryParse(stationId, out _) ||
+             !await _db.Stations.Find(station => station.Id == stationId).AnyAsync()))
+        {
+            throw new InvalidOperationException("Station not found");
+        }
+
+        var filter = string.IsNullOrWhiteSpace(stationId)
+            ? FilterDefinition<EnergyReservation>.Empty
+            : Builders<EnergyReservation>.Filter.Eq(reservation => reservation.StationId, stationId);
+        var reservations = await _db.Reservations.Find(filter).ToListAsync();
+        var now = DateTime.UtcNow;
+        var today = now.Date;
+        var tomorrow = today.AddDays(1);
+
+        var upcoming = reservations
+            .Where(reservation => reservation.Status == "Approved" && reservation.SlotStartTime > now)
+            .OrderBy(reservation => reservation.SlotStartTime)
+            .ToList();
+
+        return new OperatorDashboardResponse
+        {
+            PendingToday = reservations.Count(reservation => reservation.Status == "Pending" &&
+                reservation.SlotStartTime >= today && reservation.SlotStartTime < tomorrow),
+            ApprovedToday = reservations.Count(reservation => reservation.Status == "Approved" &&
+                reservation.SlotStartTime >= today && reservation.SlotStartTime < tomorrow),
+            CompletedToday = reservations.Count(reservation => reservation.Status == "Completed" &&
+                reservation.CompletedAt.HasValue && reservation.CompletedAt.Value >= today &&
+                reservation.CompletedAt.Value < tomorrow),
+            ApprovedFutureCount = upcoming.Count,
+            UpcomingApproved = upcoming.Take(10).Select(ToReservationResponse).ToList(),
+        };
+    }
+
     // Builds an optional [from, to] filter over CreatedAt, used by the status and top-stations reports.
     private static FilterDefinition<EnergyReservation> BuildCreatedAtRangeFilter(DateTime? from, DateTime? to)
     {
@@ -172,6 +242,35 @@ public class ReportService : IReportService
             CapacityKw = r.CapacityKw,
             Status = r.Status,
             CreatedAt = r.CreatedAt,
+        };
+    }
+
+    // Maps a live reservation document to the response shape used by mobile dashboards.
+    private static ReservationResponse ToReservationResponse(EnergyReservation reservation)
+    {
+        return new ReservationResponse
+        {
+            Id = reservation.Id,
+            ProsumerNic = reservation.ProsumerNic,
+            ProsumerName = reservation.ProsumerName,
+            StationId = reservation.StationId,
+            StationName = reservation.StationName,
+            SlotId = reservation.SlotId,
+            SlotStartTime = reservation.SlotStartTime,
+            SlotEndTime = reservation.SlotEndTime,
+            CapacityKw = reservation.CapacityKw,
+            Status = reservation.Status,
+            QrGeneratedAt = reservation.QrGeneratedAt,
+            CreatedAt = reservation.CreatedAt,
+            CreatedBy = reservation.CreatedBy,
+            UpdatedAt = reservation.UpdatedAt,
+            ApprovedAt = reservation.ApprovedAt,
+            ApprovedBy = reservation.ApprovedBy,
+            CompletedAt = reservation.CompletedAt,
+            CompletedBy = reservation.CompletedBy,
+            CancelledAt = reservation.CancelledAt,
+            CancelledBy = reservation.CancelledBy,
+            CancellationReason = reservation.CancellationReason,
         };
     }
 }

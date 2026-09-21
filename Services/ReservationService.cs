@@ -352,6 +352,43 @@ public class ReservationService : IReservationService
         return (true, ToResponse(reservation), null);
     }
 
+    // Verifies the QR and atomically claims the Approved-to-Completed transition before freeing its slot.
+    public async Task<(bool Success, ReservationResponse? Reservation, string? Error)> ScanAndCompleteAsync(
+        VerifyQrRequest request,
+        string completedBy)
+    {
+        var (valid, verifiedReservation, error) = await VerifyQrAsync(request);
+        if (!valid || verifiedReservation is null)
+        {
+            return (false, null, error);
+        }
+
+        var now = DateTime.UtcNow;
+        var filter = Builders<EnergyReservation>.Filter.And(
+            Builders<EnergyReservation>.Filter.Eq(reservation => reservation.Id, verifiedReservation.Id),
+            Builders<EnergyReservation>.Filter.Eq(reservation => reservation.Status, "Approved"),
+            Builders<EnergyReservation>.Filter.Eq(reservation => reservation.QrToken, request.QrToken));
+        var update = Builders<EnergyReservation>.Update
+            .Set(reservation => reservation.Status, "Completed")
+            .Set(reservation => reservation.CompletedAt, now)
+            .Set(reservation => reservation.CompletedBy, completedBy)
+            .Set(reservation => reservation.QrToken, (string?)null)
+            .Set(reservation => reservation.UpdatedAt, now);
+
+        // Status and QR token are compare-and-swap guards: concurrent scans cannot both complete the same transfer.
+        var completed = await _db.Reservations.FindOneAndUpdateAsync(
+            filter,
+            update,
+            new FindOneAndUpdateOptions<EnergyReservation> { ReturnDocument = ReturnDocument.After });
+        if (completed is null)
+        {
+            return (false, null, "This reservation has already been completed");
+        }
+
+        await SetSlotBookedAsync(completed.SlotId, false);
+        return (true, ToResponse(completed), null);
+    }
+
     // Returns the QR token for a reservation only while it is Approved; null otherwise.
     public async Task<string?> GetQrTokenAsync(string reservationId)
     {

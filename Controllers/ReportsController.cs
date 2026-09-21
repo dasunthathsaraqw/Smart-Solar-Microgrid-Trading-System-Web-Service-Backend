@@ -19,6 +19,7 @@ public class ReportsController : ControllerBase
 {
     private readonly IReportService _reportService;
 
+    // Initializes management reporting endpoints with live report queries.
     public ReportsController(IReportService reportService)
     {
         _reportService = reportService;
@@ -78,5 +79,21 @@ public class ReportsController : ControllerBase
     {
         var data = await _reportService.GetPendingApprovalsAsync(count);
         return Ok(data);
+    }
+
+    // Handles GET /api/reports/operator-dashboard for an optional station, retaining management-only access.
+    [HttpGet("operator-dashboard")]
+    [Authorize(Roles = "GridOperator,Backoffice")]
+    public async Task<IActionResult> GetOperatorDashboard([FromQuery] string? stationId)
+    {
+        try
+        {
+            var dashboard = await _reportService.GetOperatorDashboardAsync(stationId);
+            return Ok(dashboard);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
     }
 }

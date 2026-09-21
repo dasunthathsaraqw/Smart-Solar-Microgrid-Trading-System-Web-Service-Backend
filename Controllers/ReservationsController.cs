@@ -396,6 +396,23 @@ public class ReservationsController : ControllerBase
         return Ok(reservation);
     }
 
+    // Handles POST /api/reservations/scan-complete in one server-side QR validation and completion call.
+    [HttpPost("scan-complete")]
+    [Authorize(Roles = "GridOperator")]
+    public async Task<IActionResult> ScanComplete([FromBody] VerifyQrRequest request)
+    {
+        var completedBy = User.FindFirstValue(ClaimTypes.Email);
+        if (completedBy is null)
+        {
+            return Unauthorized(new { error = "The access token does not contain an email claim." });
+        }
+
+        // Operators have no station assignment in User, so StationId comes from the app's selected station.
+        // VerifyQrAsync checks that selection; server-bound operator station authorization remains a known limitation.
+        var (success, reservation, error) = await _reservationService.ScanAndCompleteAsync(request, completedBy);
+        return success ? Ok(reservation) : BadRequest(new { error });
+    }
+
     // Reads the authenticated prosumer's immutable NIC claim for self-service requests.
     private string? GetTokenNic()
     {
