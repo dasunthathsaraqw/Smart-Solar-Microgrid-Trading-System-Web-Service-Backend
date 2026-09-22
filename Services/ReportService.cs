@@ -1,8 +1,8 @@
 /**
  * File: ReportService.cs
  * Purpose: Implements dashboard KPI and chart-ready aggregate queries against MongoDB.
- *          Aggregation is done in-memory over the (assignment-scale) collections after a
- *          filtered fetch — simple and correct, and still a live read on every call.
+ *          Aggregation uses focused MongoDB queries where dashboard workloads benefit from
+ *          server-side filtering, counting, ordering, and limiting.
  * Author: P.D.D.T Hemachandra it23390232
  * Date: 2026
  */
@@ -183,30 +183,57 @@ public class ReportService : IReportService
             throw new InvalidOperationException("Station not found");
         }
 
-        var filter = string.IsNullOrWhiteSpace(stationId)
+        var stationFilter = string.IsNullOrWhiteSpace(stationId)
             ? FilterDefinition<EnergyReservation>.Empty
             : Builders<EnergyReservation>.Filter.Eq(reservation => reservation.StationId, stationId);
-        var reservations = await _db.Reservations.Find(filter).ToListAsync();
         var now = DateTime.UtcNow;
         var today = now.Date;
         var tomorrow = today.AddDays(1);
 
-        var upcoming = reservations
-            .Where(reservation => reservation.Status == "Approved" && reservation.SlotStartTime > now)
-            .OrderBy(reservation => reservation.SlotStartTime)
-            .ToList();
+        var filterBuilder = Builders<EnergyReservation>.Filter;
+        var pendingTodayFilter = filterBuilder.And(
+            stationFilter,
+            filterBuilder.Eq(reservation => reservation.Status, "Pending"),
+            filterBuilder.Gte(reservation => reservation.SlotStartTime, today),
+            filterBuilder.Lt(reservation => reservation.SlotStartTime, tomorrow));
+        var approvedTodayFilter = filterBuilder.And(
+            stationFilter,
+            filterBuilder.Eq(reservation => reservation.Status, "Approved"),
+            filterBuilder.Gte(reservation => reservation.SlotStartTime, today),
+            filterBuilder.Lt(reservation => reservation.SlotStartTime, tomorrow));
+        var completedTodayFilter = filterBuilder.And(
+            stationFilter,
+            filterBuilder.Eq(reservation => reservation.Status, "Completed"),
+            filterBuilder.Gte(reservation => reservation.CompletedAt, today),
+            filterBuilder.Lt(reservation => reservation.CompletedAt, tomorrow));
+        var approvedFutureFilter = filterBuilder.And(
+            stationFilter,
+            filterBuilder.Eq(reservation => reservation.Status, "Approved"),
+            filterBuilder.Gt(reservation => reservation.SlotStartTime, now));
+
+        var pendingTodayTask = _db.Reservations.CountDocumentsAsync(pendingTodayFilter);
+        var approvedTodayTask = _db.Reservations.CountDocumentsAsync(approvedTodayFilter);
+        var completedTodayTask = _db.Reservations.CountDocumentsAsync(completedTodayFilter);
+        var approvedFutureTask = _db.Reservations.CountDocumentsAsync(approvedFutureFilter);
+        var upcomingTask = _db.Reservations.Find(approvedFutureFilter)
+            .SortBy(reservation => reservation.SlotStartTime)
+            .Limit(10)
+            .ToListAsync();
+
+        await Task.WhenAll(
+            pendingTodayTask,
+            approvedTodayTask,
+            completedTodayTask,
+            approvedFutureTask,
+            upcomingTask);
 
         return new OperatorDashboardResponse
         {
-            PendingToday = reservations.Count(reservation => reservation.Status == "Pending" &&
-                reservation.SlotStartTime >= today && reservation.SlotStartTime < tomorrow),
-            ApprovedToday = reservations.Count(reservation => reservation.Status == "Approved" &&
-                reservation.SlotStartTime >= today && reservation.SlotStartTime < tomorrow),
-            CompletedToday = reservations.Count(reservation => reservation.Status == "Completed" &&
-                reservation.CompletedAt.HasValue && reservation.CompletedAt.Value >= today &&
-                reservation.CompletedAt.Value < tomorrow),
-            ApprovedFutureCount = upcoming.Count,
-            UpcomingApproved = upcoming.Take(10).Select(ToReservationResponse).ToList(),
+            PendingToday = checked((int)await pendingTodayTask),
+            ApprovedToday = checked((int)await approvedTodayTask),
+            CompletedToday = checked((int)await completedTodayTask),
+            ApprovedFutureCount = checked((int)await approvedFutureTask),
+            UpcomingApproved = (await upcomingTask).Select(ToReservationResponse).ToList(),
         };
     }
 
