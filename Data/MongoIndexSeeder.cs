@@ -96,5 +96,34 @@ public static class MongoIndexSeeder
         {
             logger.LogWarning(ex, "Could not create EnergyReservation stationId/status/completedAt index");
         }
+
+        try
+        {
+            var keys = Builders<EnergyReservation>.IndexKeys
+                .Ascending(reservation => reservation.Status)
+                .Ascending(reservation => reservation.SlotStartTime);
+            await db.Reservations.Indexes.CreateOneAsync(new CreateIndexModel<EnergyReservation>(
+                keys,
+                new CreateIndexOptions { Name = "ix_reservations_status_slotStartTime" }));
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not create EnergyReservation status/slotStartTime index");
+        }
+
+        try
+        {
+            var keys = Builders<EnergyReservation>.IndexKeys
+                .Ascending(reservation => reservation.StationId)
+                .Ascending(reservation => reservation.Status)
+                .Ascending(reservation => reservation.SlotStartTime);
+            await db.Reservations.Indexes.CreateOneAsync(new CreateIndexModel<EnergyReservation>(
+                keys,
+                new CreateIndexOptions { Name = "ix_reservations_stationId_status_slotStartTime" }));
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Could not create EnergyReservation stationId/status/slotStartTime index");
+        }
     }
 }

@@ -28,7 +28,7 @@ public sealed class MongoIndexSeederTests
         _factory = factory;
     }
 
-    // Rule: repeated seeding preserves the three exact EnergyReservation index definitions.
+    // Rule: repeated seeding preserves the five exact EnergyReservation index definitions.
     [Fact]
     public async Task CreateAsync_Repeatedly_CreatesExpectedReservationIndexes()
     {
@@ -43,6 +43,8 @@ public sealed class MongoIndexSeederTests
         var qrToken = FindIndex(indexes, "ux_reservations_qrToken_string");
         var completedHistory = FindIndex(indexes, "ix_reservations_status_completedAt");
         var stationHistory = FindIndex(indexes, "ix_reservations_stationId_status_completedAt");
+        var upcoming = FindIndex(indexes, "ix_reservations_status_slotStartTime");
+        var stationUpcoming = FindIndex(indexes, "ix_reservations_stationId_status_slotStartTime");
 
         Assert.Equal(new BsonDocument("qrToken", 1), qrToken["key"].AsBsonDocument);
         Assert.True(qrToken["unique"].AsBoolean);
@@ -56,6 +58,12 @@ public sealed class MongoIndexSeederTests
         Assert.Equal(
             new BsonDocument { { "stationId", 1 }, { "status", 1 }, { "completedAt", -1 } },
             stationHistory["key"].AsBsonDocument);
+        Assert.Equal(
+            new BsonDocument { { "status", 1 }, { "slotStartTime", 1 } },
+            upcoming["key"].AsBsonDocument);
+        Assert.Equal(
+            new BsonDocument { { "stationId", 1 }, { "status", 1 }, { "slotStartTime", 1 } },
+            stationUpcoming["key"].AsBsonDocument);
     }
 
     // Rule: the partial unique QR index excludes nulls but rejects duplicate string tokens.
