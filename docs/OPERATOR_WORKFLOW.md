@@ -77,6 +77,12 @@ For station-scoped GridOperator endpoints:
 - Having no assignment returns `403`.
 - Backoffice behavior is not restricted by GridOperator station assignment.
 
+### Slot management scope
+
+GridOperator access to `GET`, `POST`, `PUT`, and `DELETE` routes under `/api/slots` is limited to the operator's persisted assigned station. `GET /api/slots` automatically applies that station when its optional `stationId` is omitted; an explicit station must match. Slot-by-ID reads and writes verify the stored slot station before returning details or changing state. Unassigned operators and foreign-station requests return `403`.
+
+Backoffice keeps its existing cross-station administration behavior. Prosumer access to `GET /api/slots/station/{stationId}/available` is unchanged and does not require an operator station assignment.
+
 ## Operator dashboard
 
 `GET /api/reports/operator-dashboard`
