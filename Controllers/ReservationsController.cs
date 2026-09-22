@@ -65,10 +65,16 @@ public class ReservationsController : ControllerBase
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 10)
     {
+        var (authorizedStationId, stationAuthorizationError) = await AuthorizeOperatorStationAsync(stationId);
+        if (stationAuthorizationError is not null)
+        {
+            return stationAuthorizationError;
+        }
+
         try
         {
             var result = await _reservationService.GetOperatorTransactionHistoryAsync(
-                stationId,
+                authorizedStationId,
                 dateFrom,
                 dateTo,
                 page,
@@ -415,7 +421,7 @@ public class ReservationsController : ControllerBase
     [Authorize(Roles = "GridOperator")]
     public async Task<IActionResult> VerifyQr([FromBody] VerifyQrRequest request)
     {
-        var stationAuthorizationError = await AuthorizeOperatorStationAsync(request.StationId);
+        var (_, stationAuthorizationError) = await AuthorizeOperatorStationAsync(request.StationId);
         if (stationAuthorizationError is not null)
         {
             return stationAuthorizationError;
@@ -435,7 +441,7 @@ public class ReservationsController : ControllerBase
     [Authorize(Roles = "GridOperator")]
     public async Task<IActionResult> ScanComplete([FromBody] VerifyQrRequest request)
     {
-        var stationAuthorizationError = await AuthorizeOperatorStationAsync(request.StationId);
+        var (_, stationAuthorizationError) = await AuthorizeOperatorStationAsync(request.StationId);
         if (stationAuthorizationError is not null)
         {
             return stationAuthorizationError;
@@ -451,32 +457,27 @@ public class ReservationsController : ControllerBase
         return success ? Ok(reservation) : BadRequest(new { error });
     }
 
-    // Resolves the signed operator from persistent storage and authorizes only their assigned station.
-    private async Task<IActionResult?> AuthorizeOperatorStationAsync(string requestStationId)
+    // Resolves the signed operator and converts shared station-scope authorization failures into API responses.
+    private async Task<(string? StationId, IActionResult? Error)> AuthorizeOperatorStationAsync(string? requestStationId)
     {
         var operatorId = User.FindFirstValue(ClaimTypes.NameIdentifier);
         if (string.IsNullOrWhiteSpace(operatorId))
         {
-            return Unauthorized(new { error = "The access token does not contain a user ID claim." });
+            return (null, Unauthorized(new { error = "The access token does not contain a user ID claim." }));
         }
 
-        var operatorUser = await _userService.GetByIdAsync(operatorId);
-        if (operatorUser is null)
+        var (userExists, stationId, error) = await _userService.ResolveOperatorStationAsync(operatorId, requestStationId);
+        if (!userExists)
         {
-            return Unauthorized(new { error = "The authenticated operator account no longer exists." });
+            return (null, Unauthorized(new { error }));
         }
 
-        if (string.IsNullOrWhiteSpace(operatorUser.StationId))
+        if (error is not null)
         {
-            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Grid Operator is not assigned to a station." });
+            return (null, StatusCode(StatusCodes.Status403Forbidden, new { error }));
         }
 
-        if (!string.Equals(operatorUser.StationId, requestStationId, StringComparison.Ordinal))
-        {
-            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Grid Operator is not assigned to the requested station." });
-        }
-
-        return null;
+        return (stationId, null);
     }
 
     // Reads the authenticated prosumer's immutable NIC claim for self-service requests.

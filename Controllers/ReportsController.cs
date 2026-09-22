@@ -6,6 +6,7 @@
  * Date: 2026
  */
 
+using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using SmartMicrogrid.API.Services;
@@ -18,11 +19,13 @@ namespace SmartMicrogrid.API.Controllers;
 public class ReportsController : ControllerBase
 {
     private readonly IReportService _reportService;
+    private readonly IUserService _userService;
 
     // Initializes management reporting endpoints with live report queries.
-    public ReportsController(IReportService reportService)
+    public ReportsController(IReportService reportService, IUserService userService)
     {
         _reportService = reportService;
+        _userService = userService;
     }
 
     // Handles GET /api/reports/dashboard-summary — top-of-dashboard KPI counters.
@@ -86,6 +89,29 @@ public class ReportsController : ControllerBase
     [Authorize(Roles = "GridOperator,Backoffice")]
     public async Task<IActionResult> GetOperatorDashboard([FromQuery] string? stationId)
     {
+        if (User.IsInRole("GridOperator"))
+        {
+            var operatorId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (string.IsNullOrWhiteSpace(operatorId))
+            {
+                return Unauthorized(new { error = "The access token does not contain a user ID claim." });
+            }
+
+            var (userExists, authorizedStationId, error) =
+                await _userService.ResolveOperatorStationAsync(operatorId, stationId);
+            if (!userExists)
+            {
+                return Unauthorized(new { error });
+            }
+
+            if (error is not null)
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, new { error });
+            }
+
+            stationId = authorizedStationId;
+        }
+
         try
         {
             var dashboard = await _reportService.GetOperatorDashboardAsync(stationId);
