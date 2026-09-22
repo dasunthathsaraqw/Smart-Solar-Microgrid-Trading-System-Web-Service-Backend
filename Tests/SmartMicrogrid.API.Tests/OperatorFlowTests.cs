@@ -27,17 +27,17 @@ public sealed class OperatorFlowTests
         _helpers = new TestHelpers(factory);
     }
 
-    // Rule: operator history includes only completed transactions and honors station, date, order and paging filters.
+    // Rule: assigned operator history auto-scopes completed transactions and preserves date, order and paging filters.
     [Fact]
     public async Task OperatorHistory_CompletedTransactions_AreFilteredSortedAndPaged()
     {
         using var admin = await _helpers.LoginAsync("admin@smartsolar.com", "Admin@123");
-        var operatorAccount = await _helpers.CreateGridOperatorAsync(admin);
+        var station = await _helpers.CreateStationAsync(admin);
+        var otherStation = await _helpers.CreateStationAsync(admin);
+        var operatorAccount = await _helpers.CreateGridOperatorAsync(admin, station.Id);
         var prosumer = await _helpers.RegisterAndApproveProsumerAsync(admin);
         using var operatorClient = operatorAccount.Client;
         using var prosumerClient = prosumer.Client;
-        var station = await _helpers.CreateStationAsync(admin);
-        var otherStation = await _helpers.CreateStationAsync(admin);
 
         var olderCompleted = await CreateReservationWithStatusAsync(admin, prosumerClient, station.Id, 2, "Completed");
         var newerCompleted = await CreateReservationWithStatusAsync(admin, prosumerClient, station.Id, 3, "Completed");
@@ -58,24 +58,32 @@ public sealed class OperatorFlowTests
             Builders<EnergyReservation>.Update.Set(reservation => reservation.CompletedAt, newerCompletedAt));
 
         var history = await operatorClient.GetFromJsonAsync<PagedResult<ReservationResponse>>(
+            "/api/reservations/operator/history");
+        var explicitHistory = await operatorClient.GetFromJsonAsync<PagedResult<ReservationResponse>>(
             $"/api/reservations/operator/history?stationId={station.Id}");
         Assert.NotNull(history);
+        Assert.NotNull(explicitHistory);
         Assert.Equal(2, history.TotalCount);
         Assert.All(history.Items, item => Assert.Equal("Completed", item.Status));
+        Assert.All(history.Items, item => Assert.Equal(station.Id, item.StationId));
         Assert.Equal(new[] { newerCompleted.Id, olderCompleted.Id }, history.Items.Select(item => item.Id));
+        Assert.Equal(history.Items.Select(item => item.Id), explicitHistory.Items.Select(item => item.Id));
+        Assert.Equal(
+            HttpStatusCode.Forbidden,
+            (await operatorClient.GetAsync($"/api/reservations/operator/history?stationId={otherStation.Id}")).StatusCode);
 
         var dateFrom = Uri.EscapeDataString(now.AddDays(-3).ToString("O"));
         var dateTo = Uri.EscapeDataString(now.AddDays(-1).ToString("O"));
         var dateFiltered = await operatorClient.GetFromJsonAsync<PagedResult<ReservationResponse>>(
-            $"/api/reservations/operator/history?stationId={station.Id}&dateFrom={dateFrom}&dateTo={dateTo}");
+            $"/api/reservations/operator/history?dateFrom={dateFrom}&dateTo={dateTo}");
         Assert.NotNull(dateFiltered);
         Assert.Single(dateFiltered.Items);
         Assert.Equal(newerCompleted.Id, dateFiltered.Items[0].Id);
 
         var firstPage = await operatorClient.GetFromJsonAsync<PagedResult<ReservationResponse>>(
-            $"/api/reservations/operator/history?stationId={station.Id}&page=1&pageSize=1");
+            "/api/reservations/operator/history?page=1&pageSize=1");
         var secondPage = await operatorClient.GetFromJsonAsync<PagedResult<ReservationResponse>>(
-            $"/api/reservations/operator/history?stationId={station.Id}&page=2&pageSize=1");
+            "/api/reservations/operator/history?page=2&pageSize=1");
         Assert.NotNull(firstPage);
         Assert.NotNull(secondPage);
         Assert.Equal(newerCompleted.Id, Assert.Single(firstPage.Items).Id);
@@ -102,14 +110,17 @@ public sealed class OperatorFlowTests
         Assert.Equal(HttpStatusCode.Unauthorized, anonymousResponse.StatusCode);
     }
 
-    // Rule: invalid paging, date ranges and station filters return BadRequest, while no matches return an empty page.
+    // Rule: assigned empty history preserves validation while unassigned and foreign-station requests are forbidden.
     [Fact]
     public async Task OperatorHistory_ValidationAndEmptyResults_FollowApiConventions()
     {
         using var admin = await _helpers.LoginAsync("admin@smartsolar.com", "Admin@123");
-        var operatorAccount = await _helpers.CreateGridOperatorAsync(admin);
-        using var operatorClient = operatorAccount.Client;
         var emptyStation = await _helpers.CreateStationAsync(admin);
+        var otherStation = await _helpers.CreateStationAsync(admin);
+        var operatorAccount = await _helpers.CreateGridOperatorAsync(admin, emptyStation.Id);
+        var unassignedOperator = await _helpers.CreateGridOperatorAsync(admin);
+        using var operatorClient = operatorAccount.Client;
+        using var unassignedOperatorClient = unassignedOperator.Client;
 
         Assert.Equal(HttpStatusCode.BadRequest,
             (await operatorClient.GetAsync("/api/reservations/operator/history?page=0")).StatusCode);
@@ -117,11 +128,15 @@ public sealed class OperatorFlowTests
             (await operatorClient.GetAsync("/api/reservations/operator/history?pageSize=101")).StatusCode);
         Assert.Equal(HttpStatusCode.BadRequest,
             (await operatorClient.GetAsync("/api/reservations/operator/history?dateFrom=2026-02-02&dateTo=2026-02-01")).StatusCode);
-        Assert.Equal(HttpStatusCode.BadRequest,
+        Assert.Equal(HttpStatusCode.Forbidden,
             (await operatorClient.GetAsync("/api/reservations/operator/history?stationId=not-an-object-id")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden,
+            (await operatorClient.GetAsync($"/api/reservations/operator/history?stationId={otherStation.Id}")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden,
+            (await unassignedOperatorClient.GetAsync("/api/reservations/operator/history")).StatusCode);
 
         var empty = await operatorClient.GetFromJsonAsync<PagedResult<ReservationResponse>>(
-            $"/api/reservations/operator/history?stationId={emptyStation.Id}");
+            "/api/reservations/operator/history");
         Assert.NotNull(empty);
         Assert.Empty(empty.Items);
         Assert.Equal(0, empty.TotalCount);
@@ -168,11 +183,11 @@ public sealed class OperatorFlowTests
     public async Task ScanComplete_ValidQr_CompletesFreesSlotAndRejectsReplay()
     {
         using var admin = await _helpers.LoginAsync("admin@smartsolar.com", "Admin@123");
-        var operatorAccount = await _helpers.CreateGridOperatorAsync(admin);
+        var station = await _helpers.CreateStationAsync(admin);
+        var operatorAccount = await _helpers.CreateGridOperatorAsync(admin, station.Id);
         var prosumer = await _helpers.RegisterAndApproveProsumerAsync(admin);
         using var operatorClient = operatorAccount.Client;
         using var prosumerClient = prosumer.Client;
-        var station = await _helpers.CreateStationAsync(admin);
         var slot = await _helpers.CreateSlotAsync(admin, station.Id, 2);
         var booking = await _helpers.BookAsync(prosumerClient, station.Id, slot.Id);
         await _helpers.ApproveAsync(admin, booking.Reservation.Id);
@@ -187,9 +202,89 @@ public sealed class OperatorFlowTests
         Assert.Equal(HttpStatusCode.BadRequest, replay.StatusCode);
     }
 
-    // Rule: presenting a valid QR at the wrong station leaves the reservation Approved.
+    // Rule: an assigned operator cannot verify or complete at another station, leaving QR, reservation and slot unchanged.
     [Fact]
-    public async Task ScanComplete_WrongStation_RejectsWithoutChangingReservation()
+    public async Task QrEndpoints_RequestForAnotherStation_RejectBeforeChangingReservation()
+    {
+        using var admin = await _helpers.LoginAsync("admin@smartsolar.com", "Admin@123");
+        var station = await _helpers.CreateStationAsync(admin);
+        var otherStation = await _helpers.CreateStationAsync(admin);
+        var operatorAccount = await _helpers.CreateGridOperatorAsync(admin, station.Id);
+        var prosumer = await _helpers.RegisterAndApproveProsumerAsync(admin);
+        using var operatorClient = operatorAccount.Client;
+        using var prosumerClient = prosumer.Client;
+        var slot = await _helpers.CreateSlotAsync(admin, station.Id, 2);
+        var booking = await _helpers.BookAsync(prosumerClient, station.Id, slot.Id);
+        await _helpers.ApproveAsync(admin, booking.Reservation.Id);
+        var token = (await prosumerClient.GetFromJsonAsync<Dictionary<string, string>>($"/api/reservations/my/{booking.Reservation.Id}/qr"))!["qrToken"];
+
+        var verifyRejected = await operatorClient.PostAsJsonAsync(
+            "/api/reservations/verify-qr",
+            new { qrToken = token, stationId = otherStation.Id });
+        var rejected = await operatorClient.PostAsJsonAsync("/api/reservations/scan-complete", new { qrToken = token, stationId = otherStation.Id });
+        Assert.Equal(HttpStatusCode.Forbidden, verifyRejected.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, rejected.StatusCode);
+        Assert.Equal("Approved", (await admin.GetFromJsonAsync<ReservationResponse>($"/api/reservations/{booking.Reservation.Id}"))!.Status);
+        var stored = await _factory.Database.GetCollection<EnergyReservation>("EnergyReservation")
+            .Find(reservation => reservation.Id == booking.Reservation.Id)
+            .FirstOrDefaultAsync();
+        Assert.Equal(token, stored.QrToken);
+        Assert.True((await admin.GetFromJsonAsync<SlotResponse>($"/api/slots/{slot.Id}"))!.IsBooked);
+    }
+
+    // Rule: an assigned operator can verify an Approved QR at the assigned station.
+    [Fact]
+    public async Task VerifyQr_AssignedStation_ReturnsApprovedReservation()
+    {
+        using var admin = await _helpers.LoginAsync("admin@smartsolar.com", "Admin@123");
+        var station = await _helpers.CreateStationAsync(admin);
+        var operatorAccount = await _helpers.CreateGridOperatorAsync(admin, station.Id);
+        var prosumer = await _helpers.RegisterAndApproveProsumerAsync(admin);
+        using var operatorClient = operatorAccount.Client;
+        using var prosumerClient = prosumer.Client;
+        var slot = await _helpers.CreateSlotAsync(admin, station.Id, 2);
+        var booking = await _helpers.BookAsync(prosumerClient, station.Id, slot.Id);
+        await _helpers.ApproveAsync(admin, booking.Reservation.Id);
+        var token = (await prosumerClient.GetFromJsonAsync<Dictionary<string, string>>($"/api/reservations/my/{booking.Reservation.Id}/qr"))!["qrToken"];
+
+        var response = await operatorClient.PostAsJsonAsync(
+            "/api/reservations/verify-qr",
+            new { qrToken = token, stationId = station.Id });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var verified = await response.Content.ReadFromJsonAsync<ReservationResponse>();
+        Assert.Equal(booking.Reservation.Id, verified!.Id);
+        Assert.Equal("Approved", verified.Status);
+    }
+
+    // Rule: assignment authorization passes first, while the existing QR-to-reservation station check still rejects a foreign QR.
+    [Fact]
+    public async Task VerifyQr_AssignedStationButForeignReservation_PreservesExistingStationValidation()
+    {
+        using var admin = await _helpers.LoginAsync("admin@smartsolar.com", "Admin@123");
+        var assignedStation = await _helpers.CreateStationAsync(admin);
+        var reservationStation = await _helpers.CreateStationAsync(admin);
+        var operatorAccount = await _helpers.CreateGridOperatorAsync(admin, assignedStation.Id);
+        var prosumer = await _helpers.RegisterAndApproveProsumerAsync(admin);
+        using var operatorClient = operatorAccount.Client;
+        using var prosumerClient = prosumer.Client;
+        var slot = await _helpers.CreateSlotAsync(admin, reservationStation.Id, 2);
+        var booking = await _helpers.BookAsync(prosumerClient, reservationStation.Id, slot.Id);
+        await _helpers.ApproveAsync(admin, booking.Reservation.Id);
+        var token = (await prosumerClient.GetFromJsonAsync<Dictionary<string, string>>($"/api/reservations/my/{booking.Reservation.Id}/qr"))!["qrToken"];
+
+        var response = await operatorClient.PostAsJsonAsync(
+            "/api/reservations/verify-qr",
+            new { qrToken = token, stationId = assignedStation.Id });
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+        Assert.Equal("QR does not belong to this station", error!["error"]);
+        Assert.Equal("Approved", (await admin.GetFromJsonAsync<ReservationResponse>($"/api/reservations/{booking.Reservation.Id}"))!.Status);
+        Assert.True((await admin.GetFromJsonAsync<SlotResponse>($"/api/slots/{slot.Id}"))!.IsBooked);
+    }
+
+    // Rule: an unassigned GridOperator cannot verify or complete a QR at any station.
+    [Fact]
+    public async Task QrEndpoints_UnassignedOperator_ReturnForbiddenWithoutChangingReservation()
     {
         using var admin = await _helpers.LoginAsync("admin@smartsolar.com", "Admin@123");
         var operatorAccount = await _helpers.CreateGridOperatorAsync(admin);
@@ -197,14 +292,25 @@ public sealed class OperatorFlowTests
         using var operatorClient = operatorAccount.Client;
         using var prosumerClient = prosumer.Client;
         var station = await _helpers.CreateStationAsync(admin);
-        var otherStation = await _helpers.CreateStationAsync(admin);
         var slot = await _helpers.CreateSlotAsync(admin, station.Id, 2);
         var booking = await _helpers.BookAsync(prosumerClient, station.Id, slot.Id);
         await _helpers.ApproveAsync(admin, booking.Reservation.Id);
         var token = (await prosumerClient.GetFromJsonAsync<Dictionary<string, string>>($"/api/reservations/my/{booking.Reservation.Id}/qr"))!["qrToken"];
-        var rejected = await operatorClient.PostAsJsonAsync("/api/reservations/scan-complete", new { qrToken = token, stationId = otherStation.Id });
-        Assert.Equal(HttpStatusCode.BadRequest, rejected.StatusCode);
-        Assert.Equal("Approved", (await admin.GetFromJsonAsync<ReservationResponse>($"/api/reservations/{booking.Reservation.Id}"))!.Status);
+
+        var verify = await operatorClient.PostAsJsonAsync(
+            "/api/reservations/verify-qr",
+            new { qrToken = token, stationId = station.Id });
+        var complete = await operatorClient.PostAsJsonAsync(
+            "/api/reservations/scan-complete",
+            new { qrToken = token, stationId = station.Id });
+        Assert.Equal(HttpStatusCode.Forbidden, verify.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, complete.StatusCode);
+
+        var stored = await _factory.Database.GetCollection<EnergyReservation>("EnergyReservation")
+            .Find(reservation => reservation.Id == booking.Reservation.Id)
+            .FirstOrDefaultAsync();
+        Assert.Equal("Approved", stored.Status);
+        Assert.Equal(token, stored.QrToken);
         Assert.True((await admin.GetFromJsonAsync<SlotResponse>($"/api/slots/{slot.Id}"))!.IsBooked);
     }
 
@@ -213,11 +319,11 @@ public sealed class OperatorFlowTests
     public async Task ScanComplete_TwoConcurrentRequests_ExactlyOneSucceeds()
     {
         using var admin = await _helpers.LoginAsync("admin@smartsolar.com", "Admin@123");
-        var operatorAccount = await _helpers.CreateGridOperatorAsync(admin);
+        var station = await _helpers.CreateStationAsync(admin);
+        var operatorAccount = await _helpers.CreateGridOperatorAsync(admin, station.Id);
         var prosumer = await _helpers.RegisterAndApproveProsumerAsync(admin);
         using var operatorClient = operatorAccount.Client;
         using var prosumerClient = prosumer.Client;
-        var station = await _helpers.CreateStationAsync(admin);
         var slot = await _helpers.CreateSlotAsync(admin, station.Id, 2);
         var booking = await _helpers.BookAsync(prosumerClient, station.Id, slot.Id);
         await _helpers.ApproveAsync(admin, booking.Reservation.Id);
@@ -229,13 +335,14 @@ public sealed class OperatorFlowTests
         Assert.False((await admin.GetFromJsonAsync<SlotResponse>($"/api/slots/{slot.Id}"))!.IsBooked);
     }
 
-    // Rule: only GridOperators can scan and complete, not Prosumers or Backoffice users.
+    // Rule: only GridOperators can scan and complete, not Prosumers, Backoffice users or anonymous callers.
     [Fact]
-    public async Task ScanComplete_ProsumerOrBackoffice_ReturnsForbidden()
+    public async Task ScanComplete_ProsumerBackofficeOrAnonymous_IsRejected()
     {
         using var admin = await _helpers.LoginAsync("admin@smartsolar.com", "Admin@123");
         var prosumer = await _helpers.RegisterAndApproveProsumerAsync(admin);
         using var prosumerClient = prosumer.Client;
+        using var anonymousClient = _factory.CreateClient();
         var station = await _helpers.CreateStationAsync(admin);
         var slot = await _helpers.CreateSlotAsync(admin, station.Id, 2);
         var booking = await _helpers.BookAsync(prosumerClient, station.Id, slot.Id);
@@ -243,7 +350,9 @@ public sealed class OperatorFlowTests
         var token = (await prosumerClient.GetFromJsonAsync<Dictionary<string, string>>($"/api/reservations/my/{booking.Reservation.Id}/qr"))!["qrToken"];
         var prosumerResponse = await prosumerClient.PostAsJsonAsync("/api/reservations/scan-complete", new { qrToken = token, stationId = station.Id });
         var backofficeResponse = await admin.PostAsJsonAsync("/api/reservations/scan-complete", new { qrToken = token, stationId = station.Id });
+        var anonymousResponse = await anonymousClient.PostAsJsonAsync("/api/reservations/scan-complete", new { qrToken = token, stationId = station.Id });
         Assert.Equal(HttpStatusCode.Forbidden, prosumerResponse.StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, backofficeResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymousResponse.StatusCode);
     }
 }

@@ -152,6 +152,11 @@ $otherResponse = Invoke-Api 'POST' '/api/stations' @{
 Check-Status 'create other station' $otherResponse 201
 $otherStation = $otherResponse.Data
 
+$operatorAssignment = Invoke-Api 'PUT' "/api/users/$($operatorUser.Data.id)" @{
+    stationId = $mainStation.id
+} $adminToken
+Check-Status 'assign GridOperator to main station' $operatorAssignment 200
+
 $completionSlot = New-Slot 2
 $pendingSlot = New-Slot 4
 $approvedSlot = New-Slot 6
@@ -182,7 +187,7 @@ $wrongStation = Invoke-Api 'POST' '/api/reservations/scan-complete' @{
     qrToken = $qr
     stationId = $otherStation.id
 } $operatorToken
-Check-Status 'wrong station scan' $wrongStation 400
+Check-Status 'wrong station scan' $wrongStation 403
 $stillApproved = Invoke-Api 'GET' "/api/reservations/my/$($completionBooking.id)" $null $tokenA
 Check-Status 'reservation after wrong-station scan' $stillApproved 200
 Check-Value 'wrong-station scan preserved status' $stillApproved.Data.status 'Approved'
@@ -246,10 +251,14 @@ Check-Value 'operator CompletedToday' $operatorDashboard.Data.completedToday 1
 Check-Value 'operator ApprovedFutureCount' $operatorDashboard.Data.approvedFutureCount 1
 Check-Value 'operator UpcomingApproved' $operatorDashboard.Data.upcomingApproved[0].id $approvedBooking.id
 
+$automaticOperatorDashboard = Invoke-Api 'GET' '/api/reports/operator-dashboard' $null $operatorToken
+Check-Status 'assigned operator automatic dashboard scope' $automaticOperatorDashboard 200
+Check-Value 'automatic operator CompletedToday' $automaticOperatorDashboard.Data.completedToday 1
+
 $allStations = Invoke-Api 'GET' '/api/reports/operator-dashboard' $null $adminToken
 Check-Status 'all-stations operator dashboard' $allStations 200
 $missingStation = Invoke-Api 'GET' '/api/reports/operator-dashboard?stationId=000000000000000000000000' $null $operatorToken
-Check-Status 'unknown station rejected' $missingStation 400
+Check-Status 'foreign station rejected' $missingStation 403
 
 foreach ($path in @(
     '/api/reports/dashboard-summary',

@@ -68,7 +68,7 @@ public class UserService : IUserService
         return user is null ? null : ToResponse(user);
     }
 
-    // Creates a new Backoffice or GridOperator user, enforcing email uniqueness.
+    // Creates a new Backoffice or GridOperator user, enforcing email uniqueness and optional operator station validity.
     public async Task<UserResponse> CreateAsync(CreateUserRequest request, string createdByEmail)
     {
         if (await EmailExistsAsync(request.Email))
@@ -76,12 +76,17 @@ public class UserService : IUserService
             throw new InvalidOperationException("Email already exists");
         }
 
+        var stationId = request.Role == "GridOperator" && !string.IsNullOrWhiteSpace(request.StationId)
+            ? await ValidateStationIdAsync(request.StationId)
+            : null;
+
         var user = new User
         {
             Name = request.Name,
             Email = request.Email,
             PasswordHash = _passwordHasher.Hash(request.Password),
             Role = request.Role,
+            StationId = stationId,
             IsActive = true,
             CreatedAt = DateTime.UtcNow,
             CreatedBy = createdByEmail,
@@ -131,9 +136,27 @@ public class UserService : IUserService
             updates.Add(Builders<User>.Update.Set(u => u.PasswordHash, _passwordHasher.Hash(request.Password)));
         }
 
+        var resultingRole = !string.IsNullOrWhiteSpace(request.Role) ? request.Role : user.Role;
         if (!string.IsNullOrWhiteSpace(request.Role))
         {
             updates.Add(Builders<User>.Update.Set(u => u.Role, request.Role));
+        }
+
+        if (resultingRole != "GridOperator" && user.StationId is not null)
+        {
+            updates.Add(Builders<User>.Update.Unset(u => u.StationId));
+        }
+        else if (request.StationIdSpecified)
+        {
+            if (string.IsNullOrWhiteSpace(request.StationId))
+            {
+                updates.Add(Builders<User>.Update.Unset(u => u.StationId));
+            }
+            else
+            {
+                var stationId = await ValidateStationIdAsync(request.StationId);
+                updates.Add(Builders<User>.Update.Set(u => u.StationId, stationId));
+            }
         }
 
         if (request.IsActive.HasValue)
@@ -210,6 +233,47 @@ public class UserService : IUserService
         return (int)await _db.Users.CountDocumentsAsync(u => u.Role == "Backoffice" && u.IsActive);
     }
 
+    // Resolves an operator's persisted station and rejects unassigned or foreign requested scopes.
+    public async Task<(bool UserExists, string? StationId, string? Error)> ResolveOperatorStationAsync(
+        string operatorId,
+        string? requestedStationId)
+    {
+        var user = await GetByIdAsync(operatorId);
+        if (user is null)
+        {
+            return (false, null, "The authenticated operator account no longer exists.");
+        }
+
+        if (string.IsNullOrWhiteSpace(user.StationId))
+        {
+            return (true, null, "Grid Operator is not assigned to a station.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(requestedStationId) &&
+            !string.Equals(user.StationId, requestedStationId, StringComparison.Ordinal))
+        {
+            return (true, null, "Grid Operator is not assigned to the requested station.");
+        }
+
+        return (true, user.StationId, null);
+    }
+
+    // Validates an operator station reference as a MongoDB ObjectId that identifies an existing station.
+    private async Task<string> ValidateStationIdAsync(string stationId)
+    {
+        if (!ObjectId.TryParse(stationId, out _))
+        {
+            throw new InvalidOperationException("Invalid station ID");
+        }
+
+        if (!await _db.Stations.Find(station => station.Id == stationId).AnyAsync())
+        {
+            throw new InvalidOperationException("Station not found");
+        }
+
+        return stationId;
+    }
+
     // Maps a User document to its public response shape, omitting the password hash.
     private static UserResponse ToResponse(User user)
     {
@@ -219,6 +283,7 @@ public class UserService : IUserService
             Name = user.Name,
             Email = user.Email,
             Role = user.Role,
+            StationId = user.StationId,
             IsActive = user.IsActive,
             CreatedAt = user.CreatedAt,
             CreatedBy = user.CreatedBy,

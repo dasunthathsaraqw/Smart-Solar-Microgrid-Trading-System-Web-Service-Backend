@@ -21,11 +21,13 @@ namespace SmartMicrogrid.API.Controllers;
 public class ReservationsController : ControllerBase
 {
     private readonly IReservationService _reservationService;
+    private readonly IUserService _userService;
 
     // Initializes the role-gated reservation endpoints with their business service.
-    public ReservationsController(IReservationService reservationService)
+    public ReservationsController(IReservationService reservationService, IUserService userService)
     {
         _reservationService = reservationService;
+        _userService = userService;
     }
 
     // Handles GET /api/reservations?status={}&stationId={}&prosumerNic={} — lists reservations with optional filters.
@@ -63,10 +65,16 @@ public class ReservationsController : ControllerBase
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 10)
     {
+        var (authorizedStationId, stationAuthorizationError) = await AuthorizeOperatorStationAsync(stationId);
+        if (stationAuthorizationError is not null)
+        {
+            return stationAuthorizationError;
+        }
+
         try
         {
             var result = await _reservationService.GetOperatorTransactionHistoryAsync(
-                stationId,
+                authorizedStationId,
                 dateFrom,
                 dateTo,
                 page,
@@ -413,6 +421,12 @@ public class ReservationsController : ControllerBase
     [Authorize(Roles = "GridOperator")]
     public async Task<IActionResult> VerifyQr([FromBody] VerifyQrRequest request)
     {
+        var (_, stationAuthorizationError) = await AuthorizeOperatorStationAsync(request.StationId);
+        if (stationAuthorizationError is not null)
+        {
+            return stationAuthorizationError;
+        }
+
         var (valid, reservation, error) = await _reservationService.VerifyQrAsync(request);
         if (!valid)
         {
@@ -427,16 +441,43 @@ public class ReservationsController : ControllerBase
     [Authorize(Roles = "GridOperator")]
     public async Task<IActionResult> ScanComplete([FromBody] VerifyQrRequest request)
     {
+        var (_, stationAuthorizationError) = await AuthorizeOperatorStationAsync(request.StationId);
+        if (stationAuthorizationError is not null)
+        {
+            return stationAuthorizationError;
+        }
+
         var completedBy = User.FindFirstValue(ClaimTypes.Email);
         if (completedBy is null)
         {
             return Unauthorized(new { error = "The access token does not contain an email claim." });
         }
 
-        // Operators have no station assignment in User, so StationId comes from the app's selected station.
-        // VerifyQrAsync checks that selection; server-bound operator station authorization remains a known limitation.
         var (success, reservation, error) = await _reservationService.ScanAndCompleteAsync(request, completedBy);
         return success ? Ok(reservation) : BadRequest(new { error });
+    }
+
+    // Resolves the signed operator and converts shared station-scope authorization failures into API responses.
+    private async Task<(string? StationId, IActionResult? Error)> AuthorizeOperatorStationAsync(string? requestStationId)
+    {
+        var operatorId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrWhiteSpace(operatorId))
+        {
+            return (null, Unauthorized(new { error = "The access token does not contain a user ID claim." }));
+        }
+
+        var (userExists, stationId, error) = await _userService.ResolveOperatorStationAsync(operatorId, requestStationId);
+        if (!userExists)
+        {
+            return (null, Unauthorized(new { error }));
+        }
+
+        if (error is not null)
+        {
+            return (null, StatusCode(StatusCodes.Status403Forbidden, new { error }));
+        }
+
+        return (stationId, null);
     }
 
     // Reads the authenticated prosumer's immutable NIC claim for self-service requests.

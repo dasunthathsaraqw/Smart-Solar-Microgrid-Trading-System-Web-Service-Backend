@@ -32,6 +32,10 @@ public class User
     [BsonElement("role")]
     public string Role { get; set; } = string.Empty;
 
+    [BsonElement("stationId")]
+    [BsonIgnoreIfNull]
+    public string? StationId { get; set; }
+
     [BsonElement("isActive")]
     public bool IsActive { get; set; } = true;
 
