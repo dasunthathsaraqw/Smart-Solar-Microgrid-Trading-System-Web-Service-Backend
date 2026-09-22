@@ -82,12 +82,12 @@ public class SlotService : ISlotService
         return slots.Select(ToResponse).ToList();
     }
 
-    // Creates a single slot after validating the station, timing rules and overlap.
     public async Task<SlotResponse> CreateAsync(CreateSlotRequest request, string createdBy)
     {
         var station = await GetActiveStationOrThrowAsync(request.StationId);
 
         ValidateTiming(request.StartTime, request.EndTime);
+        ScheduleValidator.ValidateSlotAgainstSchedule(request.StartTime, request.EndTime, station.Schedule);
 
         if (await HasOverlapAsync(request.StationId, request.StartTime, request.EndTime))
         {
@@ -145,6 +145,9 @@ public class SlotService : ISlotService
                 continue;
             }
 
+            // Reject the entire batch atomically if any generated slot falls outside the station's operating schedule
+            ScheduleValidator.ValidateSlotAgainstSchedule(slotStart, slotEnd, station.Schedule);
+
             if (created.Any(s => s.StartTime < slotEnd && s.EndTime > slotStart))
             {
                 continue;
@@ -197,6 +200,12 @@ public class SlotService : ISlotService
         if (request.StartTime.HasValue || request.EndTime.HasValue)
         {
             ValidateTiming(newStart, newEnd);
+            
+            var station = await _db.Stations.Find(st => st.Id == slot.StationId).FirstOrDefaultAsync();
+            if (station != null)
+            {
+                ScheduleValidator.ValidateSlotAgainstSchedule(newStart, newEnd, station.Schedule);
+            }
 
             if (await HasOverlapAsync(slot.StationId, newStart, newEnd, id))
             {

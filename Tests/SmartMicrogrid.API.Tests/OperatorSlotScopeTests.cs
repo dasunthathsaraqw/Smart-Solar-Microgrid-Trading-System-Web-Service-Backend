@@ -329,4 +329,47 @@ public sealed class OperatorSlotScopeTests
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         Assert.Equal(expectedError, await ReadErrorAsync(response));
     }
+
+    [Fact]
+    public async Task BulkCreate_WithOneSlotOutsideSchedule_RejectsAtomically()
+    {
+        using var admin = await _helpers.LoginAsync("admin@smartsolar.com", "Admin@123");
+        
+        // Create a station with a restricted schedule explicitly
+        var response = await admin.PostAsJsonAsync("/api/stations", new
+        {
+            stationName = $"Restricted Station {Guid.NewGuid():N}",
+            latitude = 6.9,
+            longitude = 79.8,
+            capacityKw = 85.5,
+            availableSlots = 12,
+            schedule = "Daily 09:00-17:00",
+        });
+        var station = await response.Content.ReadFromJsonAsync<StationResponse>();
+        
+        var operatorAccount = await _helpers.CreateGridOperatorAsync(admin, station!.Id);
+        using var operatorClient = operatorAccount.Client;
+        
+        // Attempt to bulk create from 08:00 to 18:00 (outside 09:00-17:00 bounds)
+        var bulkPayload = new
+        {
+            stationId = station.Id,
+            slotDate = DateTime.UtcNow.Date.AddDays(2).ToString("yyyy-MM-dd"),
+            startTime = "08:00:00",
+            endTime = "18:00:00",
+            slotDurationMinutes = 60,
+            capacityPerSlotKw = 10
+        };
+        
+        var bulkCreateResponse = await operatorClient.PostAsJsonAsync("/api/slots/bulk", bulkPayload);
+        Assert.Equal(HttpStatusCode.BadRequest, bulkCreateResponse.StatusCode);
+        
+        var error = await bulkCreateResponse.Content.ReadAsStringAsync();
+        Assert.Contains("Slot must be within the station operating schedule", error);
+        
+        // Verify NO slots were created atomically
+        var slotsCollection = _factory.Database.GetCollection<EnergyBookingSlot>("EnergyBookingSlots");
+        var count = await slotsCollection.CountDocumentsAsync(s => s.StationId == station.Id);
+        Assert.Equal(0, count);
+    }
 }
