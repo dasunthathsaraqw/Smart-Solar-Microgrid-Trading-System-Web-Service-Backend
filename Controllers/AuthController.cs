@@ -46,16 +46,30 @@ public class AuthController : ControllerBase
         return Ok(response);
     }
 
-    // Handles GET /api/auth/me — returns the current authenticated user's info from JWT claims.
+    // Handles GET /api/auth/me — reloads current authenticated-user data using the signed user ID claim.
     [HttpGet("me")]
     [Authorize]
-    public IActionResult Me()
+    public async Task<IActionResult> Me()
     {
         var id = User.FindFirstValue(ClaimTypes.NameIdentifier);
-        var email = User.FindFirstValue(ClaimTypes.Email);
-        var name = User.FindFirstValue(ClaimTypes.Name);
-        var role = User.FindFirstValue(ClaimTypes.Role);
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            return Unauthorized(new { error = "The access token does not contain a user ID claim." });
+        }
 
-        return Ok(new { id, name, email, role });
+        var user = await _authService.GetByIdAsync(id);
+        if (user is null)
+        {
+            return Unauthorized(new { error = "The authenticated user account no longer exists." });
+        }
+
+        return Ok(new
+        {
+            user.Id,
+            user.Name,
+            user.Email,
+            user.Role,
+            StationId = user.Role == "GridOperator" ? user.StationId : null,
+        });
     }
 }
