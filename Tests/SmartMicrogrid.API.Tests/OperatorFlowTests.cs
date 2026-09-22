@@ -27,17 +27,17 @@ public sealed class OperatorFlowTests
         _helpers = new TestHelpers(factory);
     }
 
-    // Rule: operator history includes only completed transactions and honors station, date, order and paging filters.
+    // Rule: assigned operator history auto-scopes completed transactions and preserves date, order and paging filters.
     [Fact]
     public async Task OperatorHistory_CompletedTransactions_AreFilteredSortedAndPaged()
     {
         using var admin = await _helpers.LoginAsync("admin@smartsolar.com", "Admin@123");
-        var operatorAccount = await _helpers.CreateGridOperatorAsync(admin);
+        var station = await _helpers.CreateStationAsync(admin);
+        var otherStation = await _helpers.CreateStationAsync(admin);
+        var operatorAccount = await _helpers.CreateGridOperatorAsync(admin, station.Id);
         var prosumer = await _helpers.RegisterAndApproveProsumerAsync(admin);
         using var operatorClient = operatorAccount.Client;
         using var prosumerClient = prosumer.Client;
-        var station = await _helpers.CreateStationAsync(admin);
-        var otherStation = await _helpers.CreateStationAsync(admin);
 
         var olderCompleted = await CreateReservationWithStatusAsync(admin, prosumerClient, station.Id, 2, "Completed");
         var newerCompleted = await CreateReservationWithStatusAsync(admin, prosumerClient, station.Id, 3, "Completed");
@@ -58,24 +58,32 @@ public sealed class OperatorFlowTests
             Builders<EnergyReservation>.Update.Set(reservation => reservation.CompletedAt, newerCompletedAt));
 
         var history = await operatorClient.GetFromJsonAsync<PagedResult<ReservationResponse>>(
+            "/api/reservations/operator/history");
+        var explicitHistory = await operatorClient.GetFromJsonAsync<PagedResult<ReservationResponse>>(
             $"/api/reservations/operator/history?stationId={station.Id}");
         Assert.NotNull(history);
+        Assert.NotNull(explicitHistory);
         Assert.Equal(2, history.TotalCount);
         Assert.All(history.Items, item => Assert.Equal("Completed", item.Status));
+        Assert.All(history.Items, item => Assert.Equal(station.Id, item.StationId));
         Assert.Equal(new[] { newerCompleted.Id, olderCompleted.Id }, history.Items.Select(item => item.Id));
+        Assert.Equal(history.Items.Select(item => item.Id), explicitHistory.Items.Select(item => item.Id));
+        Assert.Equal(
+            HttpStatusCode.Forbidden,
+            (await operatorClient.GetAsync($"/api/reservations/operator/history?stationId={otherStation.Id}")).StatusCode);
 
         var dateFrom = Uri.EscapeDataString(now.AddDays(-3).ToString("O"));
         var dateTo = Uri.EscapeDataString(now.AddDays(-1).ToString("O"));
         var dateFiltered = await operatorClient.GetFromJsonAsync<PagedResult<ReservationResponse>>(
-            $"/api/reservations/operator/history?stationId={station.Id}&dateFrom={dateFrom}&dateTo={dateTo}");
+            $"/api/reservations/operator/history?dateFrom={dateFrom}&dateTo={dateTo}");
         Assert.NotNull(dateFiltered);
         Assert.Single(dateFiltered.Items);
         Assert.Equal(newerCompleted.Id, dateFiltered.Items[0].Id);
 
         var firstPage = await operatorClient.GetFromJsonAsync<PagedResult<ReservationResponse>>(
-            $"/api/reservations/operator/history?stationId={station.Id}&page=1&pageSize=1");
+            "/api/reservations/operator/history?page=1&pageSize=1");
         var secondPage = await operatorClient.GetFromJsonAsync<PagedResult<ReservationResponse>>(
-            $"/api/reservations/operator/history?stationId={station.Id}&page=2&pageSize=1");
+            "/api/reservations/operator/history?page=2&pageSize=1");
         Assert.NotNull(firstPage);
         Assert.NotNull(secondPage);
         Assert.Equal(newerCompleted.Id, Assert.Single(firstPage.Items).Id);
@@ -102,14 +110,17 @@ public sealed class OperatorFlowTests
         Assert.Equal(HttpStatusCode.Unauthorized, anonymousResponse.StatusCode);
     }
 
-    // Rule: invalid paging, date ranges and station filters return BadRequest, while no matches return an empty page.
+    // Rule: assigned empty history preserves validation while unassigned and foreign-station requests are forbidden.
     [Fact]
     public async Task OperatorHistory_ValidationAndEmptyResults_FollowApiConventions()
     {
         using var admin = await _helpers.LoginAsync("admin@smartsolar.com", "Admin@123");
-        var operatorAccount = await _helpers.CreateGridOperatorAsync(admin);
-        using var operatorClient = operatorAccount.Client;
         var emptyStation = await _helpers.CreateStationAsync(admin);
+        var otherStation = await _helpers.CreateStationAsync(admin);
+        var operatorAccount = await _helpers.CreateGridOperatorAsync(admin, emptyStation.Id);
+        var unassignedOperator = await _helpers.CreateGridOperatorAsync(admin);
+        using var operatorClient = operatorAccount.Client;
+        using var unassignedOperatorClient = unassignedOperator.Client;
 
         Assert.Equal(HttpStatusCode.BadRequest,
             (await operatorClient.GetAsync("/api/reservations/operator/history?page=0")).StatusCode);
@@ -117,11 +128,15 @@ public sealed class OperatorFlowTests
             (await operatorClient.GetAsync("/api/reservations/operator/history?pageSize=101")).StatusCode);
         Assert.Equal(HttpStatusCode.BadRequest,
             (await operatorClient.GetAsync("/api/reservations/operator/history?dateFrom=2026-02-02&dateTo=2026-02-01")).StatusCode);
-        Assert.Equal(HttpStatusCode.BadRequest,
+        Assert.Equal(HttpStatusCode.Forbidden,
             (await operatorClient.GetAsync("/api/reservations/operator/history?stationId=not-an-object-id")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden,
+            (await operatorClient.GetAsync($"/api/reservations/operator/history?stationId={otherStation.Id}")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden,
+            (await unassignedOperatorClient.GetAsync("/api/reservations/operator/history")).StatusCode);
 
         var empty = await operatorClient.GetFromJsonAsync<PagedResult<ReservationResponse>>(
-            $"/api/reservations/operator/history?stationId={emptyStation.Id}");
+            "/api/reservations/operator/history");
         Assert.NotNull(empty);
         Assert.Empty(empty.Items);
         Assert.Equal(0, empty.TotalCount);

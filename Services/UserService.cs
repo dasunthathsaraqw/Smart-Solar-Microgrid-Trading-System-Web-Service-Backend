@@ -233,6 +233,31 @@ public class UserService : IUserService
         return (int)await _db.Users.CountDocumentsAsync(u => u.Role == "Backoffice" && u.IsActive);
     }
 
+    // Resolves an operator's persisted station and rejects unassigned or foreign requested scopes.
+    public async Task<(bool UserExists, string? StationId, string? Error)> ResolveOperatorStationAsync(
+        string operatorId,
+        string? requestedStationId)
+    {
+        var user = await GetByIdAsync(operatorId);
+        if (user is null)
+        {
+            return (false, null, "The authenticated operator account no longer exists.");
+        }
+
+        if (string.IsNullOrWhiteSpace(user.StationId))
+        {
+            return (true, null, "Grid Operator is not assigned to a station.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(requestedStationId) &&
+            !string.Equals(user.StationId, requestedStationId, StringComparison.Ordinal))
+        {
+            return (true, null, "Grid Operator is not assigned to the requested station.");
+        }
+
+        return (true, user.StationId, null);
+    }
+
     // Validates an operator station reference as a MongoDB ObjectId that identifies an existing station.
     private async Task<string> ValidateStationIdAsync(string stationId)
     {

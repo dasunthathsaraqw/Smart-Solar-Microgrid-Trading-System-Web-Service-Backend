@@ -251,10 +251,14 @@ Check-Value 'operator CompletedToday' $operatorDashboard.Data.completedToday 1
 Check-Value 'operator ApprovedFutureCount' $operatorDashboard.Data.approvedFutureCount 1
 Check-Value 'operator UpcomingApproved' $operatorDashboard.Data.upcomingApproved[0].id $approvedBooking.id
 
+$automaticOperatorDashboard = Invoke-Api 'GET' '/api/reports/operator-dashboard' $null $operatorToken
+Check-Status 'assigned operator automatic dashboard scope' $automaticOperatorDashboard 200
+Check-Value 'automatic operator CompletedToday' $automaticOperatorDashboard.Data.completedToday 1
+
 $allStations = Invoke-Api 'GET' '/api/reports/operator-dashboard' $null $adminToken
 Check-Status 'all-stations operator dashboard' $allStations 200
 $missingStation = Invoke-Api 'GET' '/api/reports/operator-dashboard?stationId=000000000000000000000000' $null $operatorToken
-Check-Status 'unknown station rejected' $missingStation 400
+Check-Status 'foreign station rejected' $missingStation 403
 
 foreach ($path in @(
     '/api/reports/dashboard-summary',

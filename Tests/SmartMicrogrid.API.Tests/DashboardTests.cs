@@ -67,15 +67,15 @@ public sealed class DashboardTests
         Assert.Equal(0, other.CancelledCount);
     }
 
-    // Rule: every operator metric is station-scoped, UTC-based, ordered, and excludes past Approved bookings from upcoming.
+    // Rule: assigned operators get the same station-scoped dashboard with an omitted or matching stationId and cannot request another station.
     [Fact]
-    public async Task GetOperatorDashboard_StationScope_ReturnsAllMetricsAndOrderedFutureApproved()
+    public async Task GetOperatorDashboard_AssignedOperator_IsAutomaticallyStationScoped()
     {
         using var admin = await _helpers.LoginAsync("admin@smartsolar.com", "Admin@123");
-        var operatorAccount = await _helpers.CreateGridOperatorAsync(admin);
-        using var operatorClient = operatorAccount.Client;
         var station = await _helpers.CreateStationAsync(admin);
         var unrelatedStation = await _helpers.CreateStationAsync(admin);
+        var operatorAccount = await _helpers.CreateGridOperatorAsync(admin, station.Id);
+        using var operatorClient = operatorAccount.Client;
         var now = DateTime.UtcNow;
         var today = now.Date;
         var tomorrow = today.AddDays(1);
@@ -97,10 +97,17 @@ public sealed class DashboardTests
             CreateReservation(unrelatedStation.Id, unrelatedStation.StationName, "Completed", today.AddDays(-1), now),
         ]);
 
-        var response = await operatorClient.GetAsync($"/api/reports/operator-dashboard?stationId={station.Id}");
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var dashboard = await response.Content.ReadFromJsonAsync<OperatorDashboardResponse>();
+        var automaticResponse = await operatorClient.GetAsync("/api/reports/operator-dashboard");
+        var explicitResponse = await operatorClient.GetAsync($"/api/reports/operator-dashboard?stationId={station.Id}");
+        var foreignResponse = await operatorClient.GetAsync($"/api/reports/operator-dashboard?stationId={unrelatedStation.Id}");
+        Assert.Equal(HttpStatusCode.OK, automaticResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, explicitResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, foreignResponse.StatusCode);
+
+        var dashboard = await automaticResponse.Content.ReadFromJsonAsync<OperatorDashboardResponse>();
+        var explicitDashboard = await explicitResponse.Content.ReadFromJsonAsync<OperatorDashboardResponse>();
         Assert.NotNull(dashboard);
+        Assert.NotNull(explicitDashboard);
         Assert.Equal(1, dashboard.PendingToday);
         Assert.Equal(1, dashboard.ApprovedToday);
         Assert.Equal(1, dashboard.CompletedToday);
@@ -110,9 +117,16 @@ public sealed class DashboardTests
             dashboard.UpcomingApproved.Select(reservation => reservation.Id));
         Assert.DoesNotContain(dashboard.UpcomingApproved, reservation => reservation.SlotStartTime <= now);
         Assert.All(dashboard.UpcomingApproved, reservation => Assert.Equal(station.Id, reservation.StationId));
+        Assert.Equal(dashboard.PendingToday, explicitDashboard.PendingToday);
+        Assert.Equal(dashboard.ApprovedToday, explicitDashboard.ApprovedToday);
+        Assert.Equal(dashboard.CompletedToday, explicitDashboard.CompletedToday);
+        Assert.Equal(dashboard.ApprovedFutureCount, explicitDashboard.ApprovedFutureCount);
+        Assert.Equal(
+            dashboard.UpcomingApproved.Select(reservation => reservation.Id),
+            explicitDashboard.UpcomingApproved.Select(reservation => reservation.Id));
     }
 
-    // Rule: omitting stationId returns counts and the first ten upcoming Approved bookings across the entire grid.
+    // Rule: Backoffice retains system-wide dashboard access without stationId and station-scoped access with stationId.
     [Fact]
     public async Task GetOperatorDashboard_WithoutStation_ReturnsSystemWideMetrics()
     {
@@ -159,7 +173,10 @@ public sealed class DashboardTests
             .ToListAsync();
 
         var dashboard = await admin.GetFromJsonAsync<OperatorDashboardResponse>("/api/reports/operator-dashboard");
+        var scopedDashboard = await admin.GetFromJsonAsync<OperatorDashboardResponse>(
+            $"/api/reports/operator-dashboard?stationId={firstStation.Id}");
         Assert.NotNull(dashboard);
+        Assert.NotNull(scopedDashboard);
         Assert.Equal(expectedPending, dashboard.PendingToday);
         Assert.Equal(expectedApproved, dashboard.ApprovedToday);
         Assert.Equal(expectedCompleted, dashboard.CompletedToday);
@@ -167,29 +184,41 @@ public sealed class DashboardTests
         Assert.Equal(
             expectedUpcoming.Select(reservation => reservation.Id),
             dashboard.UpcomingApproved.Select(reservation => reservation.Id));
+        Assert.Equal(1, scopedDashboard.PendingToday);
+        Assert.Equal(0, scopedDashboard.ApprovedToday);
+        Assert.Equal(0, scopedDashboard.CompletedToday);
+        Assert.Equal(1, scopedDashboard.ApprovedFutureCount);
+        Assert.All(scopedDashboard.UpcomingApproved, reservation => Assert.Equal(firstStation.Id, reservation.StationId));
     }
 
-    // Rule: empty scopes return zero values, role gates remain unchanged, and invalid station filters are rejected.
+    // Rule: empty assigned scopes return zeroes, unassigned/foreign operators are forbidden, and role gates remain unchanged.
     [Fact]
     public async Task GetOperatorDashboard_EmptyScopeValidationAndAuthorization_FollowApiConventions()
     {
         using var admin = await _helpers.LoginAsync("admin@smartsolar.com", "Admin@123");
-        var operatorAccount = await _helpers.CreateGridOperatorAsync(admin);
+        var emptyStation = await _helpers.CreateStationAsync(admin);
+        var otherStation = await _helpers.CreateStationAsync(admin);
+        var operatorAccount = await _helpers.CreateGridOperatorAsync(admin, emptyStation.Id);
+        var unassignedOperator = await _helpers.CreateGridOperatorAsync(admin);
         var prosumer = await _helpers.RegisterAndApproveProsumerAsync(admin);
         using var operatorClient = operatorAccount.Client;
+        using var unassignedOperatorClient = unassignedOperator.Client;
         using var prosumerClient = prosumer.Client;
         using var anonymousClient = _factory.CreateClient();
-        var emptyStation = await _helpers.CreateStationAsync(admin);
 
-        var operatorResponse = await operatorClient.GetAsync($"/api/reports/operator-dashboard?stationId={emptyStation.Id}");
+        var operatorResponse = await operatorClient.GetAsync("/api/reports/operator-dashboard");
         var backofficeResponse = await admin.GetAsync($"/api/reports/operator-dashboard?stationId={emptyStation.Id}");
         var prosumerResponse = await prosumerClient.GetAsync($"/api/reports/operator-dashboard?stationId={emptyStation.Id}");
         var anonymousResponse = await anonymousClient.GetAsync($"/api/reports/operator-dashboard?stationId={emptyStation.Id}");
+        var unassignedResponse = await unassignedOperatorClient.GetAsync("/api/reports/operator-dashboard");
+        var foreignResponse = await operatorClient.GetAsync($"/api/reports/operator-dashboard?stationId={otherStation.Id}");
 
         Assert.Equal(HttpStatusCode.OK, operatorResponse.StatusCode);
         Assert.Equal(HttpStatusCode.OK, backofficeResponse.StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, prosumerResponse.StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, anonymousResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, unassignedResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, foreignResponse.StatusCode);
 
         var emptyDashboard = await operatorResponse.Content.ReadFromJsonAsync<OperatorDashboardResponse>();
         Assert.NotNull(emptyDashboard);
@@ -200,10 +229,10 @@ public sealed class DashboardTests
         Assert.Empty(emptyDashboard.UpcomingApproved);
 
         Assert.Equal(
-            HttpStatusCode.BadRequest,
+            HttpStatusCode.Forbidden,
             (await operatorClient.GetAsync("/api/reports/operator-dashboard?stationId=not-an-object-id")).StatusCode);
         Assert.Equal(
-            HttpStatusCode.BadRequest,
+            HttpStatusCode.Forbidden,
             (await operatorClient.GetAsync("/api/reports/operator-dashboard?stationId=000000000000000000000000")).StatusCode);
     }
 
