@@ -243,7 +243,7 @@ public sealed class OperatorReservationScopeTests
             (await backofficeUpdate.Content.ReadFromJsonAsync<ReservationResponse>())!.SlotId);
     }
 
-    // Rule: cancel, approve, direct complete and QR retrieval operate only on reservations at the assigned station.
+    // Rule: cancel, approve and QR remain station-scoped, while direct completion is Backoffice-only.
     [Fact]
     public async Task LifecycleAndQr_EnforceAssignedStationWithoutChangingTransitions()
     {
@@ -303,17 +303,21 @@ public sealed class OperatorReservationScopeTests
             (await admin.GetAsync($"/api/reservations/{foreignApproval.Id}/qr")).StatusCode);
 
         await _helpers.ApproveAsync(operatorClient, ownCompletion.Id);
-        var completed = await operatorClient.PutAsync($"/api/reservations/{ownCompletion.Id}/complete", null);
-        Assert.Equal(HttpStatusCode.OK, completed.StatusCode);
-        var completedReservation = await completed.Content.ReadFromJsonAsync<ReservationResponse>();
-        Assert.NotNull(completedReservation);
-        Assert.Equal("Completed", completedReservation.Status);
-        Assert.Equal(operatorAccount.Email, completedReservation.CompletedBy);
+        await AssertForbiddenErrorAsync(
+            await operatorClient.PutAsync($"/api/reservations/{ownCompletion.Id}/complete", null),
+            "Grid Operators must complete energy transfers through QR verification.");
+        var completedByBackoffice = await admin.PutAsync(
+            $"/api/reservations/{ownCompletion.Id}/complete",
+            null);
+        Assert.Equal(HttpStatusCode.OK, completedByBackoffice.StatusCode);
+        Assert.Equal(
+            "Completed",
+            (await completedByBackoffice.Content.ReadFromJsonAsync<ReservationResponse>())!.Status);
 
         await _helpers.ApproveAsync(admin, foreignCompletion.Id);
         await AssertForbiddenErrorAsync(
             await operatorClient.PutAsync($"/api/reservations/{foreignCompletion.Id}/complete", null),
-            "Grid Operator is not assigned to this reservation's station.");
+            "Grid Operators must complete energy transfers through QR verification.");
         Assert.Equal(
             HttpStatusCode.OK,
             (await admin.PutAsync($"/api/reservations/{foreignCompletion.Id}/complete", null)).StatusCode);
@@ -347,7 +351,6 @@ public sealed class OperatorReservationScopeTests
             client => client.PutAsJsonAsync($"/api/reservations/{reservation.Id}", new { newSlotId = destination.Id }),
             client => client.PutAsJsonAsync($"/api/reservations/{reservation.Id}/cancel", new { reason = "Denied" }),
             client => client.PutAsync($"/api/reservations/{reservation.Id}/approve", null),
-            client => client.PutAsync($"/api/reservations/{reservation.Id}/complete", null),
             client => client.GetAsync($"/api/reservations/{reservation.Id}/qr"),
         };
 
@@ -359,6 +362,16 @@ public sealed class OperatorReservationScopeTests
             Assert.Equal(HttpStatusCode.Forbidden, (await request(prosumerClient)).StatusCode);
             Assert.Equal(HttpStatusCode.Unauthorized, (await request(anonymousClient)).StatusCode);
         }
+
+        await AssertForbiddenErrorAsync(
+            await unassignedClient.PutAsync($"/api/reservations/{reservation.Id}/complete", null),
+            "Grid Operators must complete energy transfers through QR verification.");
+        Assert.Equal(
+            HttpStatusCode.Forbidden,
+            (await prosumerClient.PutAsync($"/api/reservations/{reservation.Id}/complete", null)).StatusCode);
+        Assert.Equal(
+            HttpStatusCode.Unauthorized,
+            (await anonymousClient.PutAsync($"/api/reservations/{reservation.Id}/complete", null)).StatusCode);
     }
 
     // Creates a Pending reservation through the existing Prosumer workflow for a scoped scenario.

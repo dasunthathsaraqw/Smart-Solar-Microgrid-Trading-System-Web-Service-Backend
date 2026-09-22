@@ -178,7 +178,7 @@ public sealed class OperatorFlowTests
         return response;
     }
 
-    // Rule: a valid operator scan completes an approved booking, frees the slot and rejects replay.
+    // Rule: direct completion is rejected without mutation, while a valid scan completes and rejects replay.
     [Fact]
     public async Task ScanComplete_ValidQr_CompletesFreesSlotAndRejectsReplay()
     {
@@ -192,12 +192,50 @@ public sealed class OperatorFlowTests
         var booking = await _helpers.BookAsync(prosumerClient, station.Id, slot.Id);
         await _helpers.ApproveAsync(admin, booking.Reservation.Id);
         var token = (await prosumerClient.GetFromJsonAsync<Dictionary<string, string>>($"/api/reservations/my/{booking.Reservation.Id}/qr"))!["qrToken"];
+
+        var directCompletion = await operatorClient.PutAsync(
+            $"/api/reservations/{booking.Reservation.Id}/complete",
+            null);
+        Assert.Equal(HttpStatusCode.Forbidden, directCompletion.StatusCode);
+        var directError = await directCompletion.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+        Assert.Equal(
+            "Grid Operators must complete energy transfers through QR verification.",
+            directError!["error"]);
+
+        var unchanged = await admin.GetFromJsonAsync<ReservationResponse>(
+            $"/api/reservations/{booking.Reservation.Id}");
+        Assert.NotNull(unchanged);
+        Assert.Equal("Approved", unchanged.Status);
+        Assert.Null(unchanged.CompletedAt);
+        Assert.Null(unchanged.CompletedBy);
+        var storedBeforeScan = await _factory.Database.GetCollection<EnergyReservation>("EnergyReservation")
+            .Find(reservation => reservation.Id == booking.Reservation.Id)
+            .FirstOrDefaultAsync();
+        Assert.Equal(token, storedBeforeScan.QrToken);
+        Assert.True((await admin.GetFromJsonAsync<SlotResponse>($"/api/slots/{slot.Id}"))!.IsBooked);
+        Assert.Equal(
+            HttpStatusCode.OK,
+            (await operatorClient.PostAsJsonAsync(
+                "/api/reservations/verify-qr",
+                new { qrToken = token, stationId = station.Id })).StatusCode);
+
         var scan = await operatorClient.PostAsJsonAsync("/api/reservations/scan-complete", new { qrToken = token, stationId = station.Id });
         Assert.Equal(HttpStatusCode.OK, scan.StatusCode);
         var completed = await scan.Content.ReadFromJsonAsync<ReservationResponse>();
         Assert.Equal("Completed", completed!.Status);
+        Assert.NotNull(completed.CompletedAt);
         Assert.Equal(operatorAccount.Email, completed.CompletedBy);
+        var storedAfterScan = await _factory.Database.GetCollection<EnergyReservation>("EnergyReservation")
+            .Find(reservation => reservation.Id == booking.Reservation.Id)
+            .FirstOrDefaultAsync();
+        Assert.Null(storedAfterScan.QrToken);
         Assert.False((await admin.GetFromJsonAsync<SlotResponse>($"/api/slots/{slot.Id}"))!.IsBooked);
+
+        var history = await operatorClient.GetFromJsonAsync<PagedResult<ReservationResponse>>(
+            "/api/reservations/operator/history");
+        var historyItem = Assert.Single(history!.Items, item => item.Id == booking.Reservation.Id);
+        Assert.Equal(operatorAccount.Email, historyItem.CompletedBy);
+
         var replay = await operatorClient.PostAsJsonAsync("/api/reservations/scan-complete", new { qrToken = token, stationId = station.Id });
         Assert.Equal(HttpStatusCode.BadRequest, replay.StatusCode);
     }
