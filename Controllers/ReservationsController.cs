@@ -21,11 +21,13 @@ namespace SmartMicrogrid.API.Controllers;
 public class ReservationsController : ControllerBase
 {
     private readonly IReservationService _reservationService;
+    private readonly IUserService _userService;
 
     // Initializes the role-gated reservation endpoints with their business service.
-    public ReservationsController(IReservationService reservationService)
+    public ReservationsController(IReservationService reservationService, IUserService userService)
     {
         _reservationService = reservationService;
+        _userService = userService;
     }
 
     // Handles GET /api/reservations?status={}&stationId={}&prosumerNic={} — lists reservations with optional filters.
@@ -413,6 +415,12 @@ public class ReservationsController : ControllerBase
     [Authorize(Roles = "GridOperator")]
     public async Task<IActionResult> VerifyQr([FromBody] VerifyQrRequest request)
     {
+        var stationAuthorizationError = await AuthorizeOperatorStationAsync(request.StationId);
+        if (stationAuthorizationError is not null)
+        {
+            return stationAuthorizationError;
+        }
+
         var (valid, reservation, error) = await _reservationService.VerifyQrAsync(request);
         if (!valid)
         {
@@ -427,16 +435,48 @@ public class ReservationsController : ControllerBase
     [Authorize(Roles = "GridOperator")]
     public async Task<IActionResult> ScanComplete([FromBody] VerifyQrRequest request)
     {
+        var stationAuthorizationError = await AuthorizeOperatorStationAsync(request.StationId);
+        if (stationAuthorizationError is not null)
+        {
+            return stationAuthorizationError;
+        }
+
         var completedBy = User.FindFirstValue(ClaimTypes.Email);
         if (completedBy is null)
         {
             return Unauthorized(new { error = "The access token does not contain an email claim." });
         }
 
-        // Operators have no station assignment in User, so StationId comes from the app's selected station.
-        // VerifyQrAsync checks that selection; server-bound operator station authorization remains a known limitation.
         var (success, reservation, error) = await _reservationService.ScanAndCompleteAsync(request, completedBy);
         return success ? Ok(reservation) : BadRequest(new { error });
+    }
+
+    // Resolves the signed operator from persistent storage and authorizes only their assigned station.
+    private async Task<IActionResult?> AuthorizeOperatorStationAsync(string requestStationId)
+    {
+        var operatorId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrWhiteSpace(operatorId))
+        {
+            return Unauthorized(new { error = "The access token does not contain a user ID claim." });
+        }
+
+        var operatorUser = await _userService.GetByIdAsync(operatorId);
+        if (operatorUser is null)
+        {
+            return Unauthorized(new { error = "The authenticated operator account no longer exists." });
+        }
+
+        if (string.IsNullOrWhiteSpace(operatorUser.StationId))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Grid Operator is not assigned to a station." });
+        }
+
+        if (!string.Equals(operatorUser.StationId, requestStationId, StringComparison.Ordinal))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = "Grid Operator is not assigned to the requested station." });
+        }
+
+        return null;
     }
 
     // Reads the authenticated prosumer's immutable NIC claim for self-service requests.
