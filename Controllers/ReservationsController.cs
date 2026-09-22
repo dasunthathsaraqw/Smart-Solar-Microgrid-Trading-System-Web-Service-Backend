@@ -22,12 +22,17 @@ public class ReservationsController : ControllerBase
 {
     private readonly IReservationService _reservationService;
     private readonly IUserService _userService;
+    private readonly ISlotService _slotService;
 
     // Initializes the role-gated reservation endpoints with their business service.
-    public ReservationsController(IReservationService reservationService, IUserService userService)
+    public ReservationsController(
+        IReservationService reservationService,
+        IUserService userService,
+        ISlotService slotService)
     {
         _reservationService = reservationService;
         _userService = userService;
+        _slotService = slotService;
     }
 
     // Handles GET /api/reservations?status={}&stationId={}&prosumerNic={} — lists reservations with optional filters.
@@ -35,7 +40,13 @@ public class ReservationsController : ControllerBase
     [Authorize(Roles = "Backoffice,GridOperator")]
     public async Task<IActionResult> GetAll([FromQuery] string? status, [FromQuery] string? stationId, [FromQuery] string? prosumerNic)
     {
-        var reservations = await _reservationService.GetAllAsync(status, stationId, prosumerNic);
+        var (authorizedStationId, authorizationError) = await ResolveManagementStationScopeAsync(stationId);
+        if (authorizationError is not null)
+        {
+            return authorizationError;
+        }
+
+        var reservations = await _reservationService.GetAllAsync(status, authorizedStationId, prosumerNic);
         return Ok(reservations);
     }
 
@@ -44,6 +55,15 @@ public class ReservationsController : ControllerBase
     [Authorize(Roles = "Backoffice,GridOperator")]
     public async Task<IActionResult> Search([FromBody] ReservationSearchRequest request)
     {
+        var (authorizedStationId, authorizationError) = await ResolveManagementStationScopeAsync(request.StationId);
+        if (authorizationError is not null)
+        {
+            return authorizationError;
+        }
+
+        // Grid Operators cannot widen the search beyond their persisted station.
+        request.StationId = authorizedStationId;
+
         try
         {
             var result = await _reservationService.SearchAsync(request);
@@ -96,6 +116,12 @@ public class ReservationsController : ControllerBase
         if (reservation is null)
         {
             return NotFound();
+        }
+
+        var authorizationError = await AuthorizeReservationForOperatorAsync(reservation);
+        if (authorizationError is not null)
+        {
+            return authorizationError;
         }
 
         return Ok(reservation);
@@ -282,6 +308,13 @@ public class ReservationsController : ControllerBase
     [Authorize(Roles = "Backoffice,GridOperator")]
     public async Task<IActionResult> Create([FromBody] CreateReservationRequest request)
     {
+        var (authorizedStationId, authorizationError) = await ResolveManagementStationScopeAsync(request.StationId);
+        if (authorizationError is not null)
+        {
+            return authorizationError;
+        }
+
+        request.StationId = authorizedStationId!;
         var createdBy = User.FindFirstValue(ClaimTypes.Email) ?? User.Identity?.Name ?? "unknown";
 
         try
@@ -304,6 +337,31 @@ public class ReservationsController : ControllerBase
     [Authorize(Roles = "Backoffice,GridOperator")]
     public async Task<IActionResult> Update(string id, [FromBody] UpdateReservationRequest request)
     {
+        if (User.IsInRole("GridOperator"))
+        {
+            var existingReservation = await _reservationService.GetByIdAsync(id);
+            if (existingReservation is null)
+            {
+                return NotFound();
+            }
+
+            var authorizationError = await AuthorizeReservationForOperatorAsync(existingReservation);
+            if (authorizationError is not null)
+            {
+                return authorizationError;
+            }
+
+            var destinationSlot = await _slotService.GetByIdAsync(request.NewSlotId);
+            if (destinationSlot is not null &&
+                !string.Equals(destinationSlot.StationId, existingReservation.StationId, StringComparison.Ordinal))
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, new
+                {
+                    error = "Grid Operator is not assigned to the requested station."
+                });
+            }
+        }
+
         var updatedBy = User.FindFirstValue(ClaimTypes.Email) ?? User.Identity?.Name ?? "unknown";
 
         try
@@ -331,6 +389,12 @@ public class ReservationsController : ControllerBase
     [Authorize(Roles = "Backoffice,GridOperator")]
     public async Task<IActionResult> Cancel(string id, [FromBody] CancelReservationRequest request)
     {
+        var authorizationError = await AuthorizeReservationIdForOperatorAsync(id);
+        if (authorizationError is not null)
+        {
+            return authorizationError;
+        }
+
         var cancelledBy = User.FindFirstValue(ClaimTypes.Email) ?? User.Identity?.Name ?? "unknown";
         var isBackoffice = User.IsInRole("Backoffice");
 
@@ -355,6 +419,12 @@ public class ReservationsController : ControllerBase
     [Authorize(Roles = "Backoffice,GridOperator")]
     public async Task<IActionResult> Approve(string id)
     {
+        var authorizationError = await AuthorizeReservationIdForOperatorAsync(id);
+        if (authorizationError is not null)
+        {
+            return authorizationError;
+        }
+
         var approvedBy = User.FindFirstValue(ClaimTypes.Email) ?? User.Identity?.Name ?? "unknown";
 
         try
@@ -373,11 +443,19 @@ public class ReservationsController : ControllerBase
         }
     }
 
-    // Handles PUT /api/reservations/{id}/complete — transitions Approved to Completed and frees the slot.
+    // Handles Backoffice direct completion; Grid Operators must use the QR-protected scan-complete workflow.
     [HttpPut("{id}/complete")]
     [Authorize(Roles = "Backoffice,GridOperator")]
     public async Task<IActionResult> Complete(string id)
     {
+        if (User.IsInRole("GridOperator"))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                error = "Grid Operators must complete energy transfers through QR verification."
+            });
+        }
+
         var completedBy = User.FindFirstValue(ClaimTypes.Email) ?? User.Identity?.Name ?? "unknown";
 
         try
@@ -405,6 +483,12 @@ public class ReservationsController : ControllerBase
         if (reservation is null)
         {
             return NotFound();
+        }
+
+        var authorizationError = await AuthorizeReservationForOperatorAsync(reservation);
+        if (authorizationError is not null)
+        {
+            return authorizationError;
         }
 
         var token = await _reservationService.GetQrTokenAsync(id);
@@ -478,6 +562,57 @@ public class ReservationsController : ControllerBase
         }
 
         return (stationId, null);
+    }
+
+    // Backoffice retains its requested scope; Grid Operators always use their persisted station assignment.
+    private async Task<(string? StationId, IActionResult? Error)> ResolveManagementStationScopeAsync(
+        string? requestStationId)
+    {
+        if (!User.IsInRole("GridOperator"))
+        {
+            return (requestStationId, null);
+        }
+
+        return await AuthorizeOperatorStationAsync(requestStationId);
+    }
+
+    // Loads only for Grid Operators so Backoffice behavior and service-side not-found handling remain unchanged.
+    private async Task<IActionResult?> AuthorizeReservationIdForOperatorAsync(string id)
+    {
+        if (!User.IsInRole("GridOperator"))
+        {
+            return null;
+        }
+
+        var reservation = await _reservationService.GetByIdAsync(id);
+        return reservation is null
+            ? NotFound()
+            : await AuthorizeReservationForOperatorAsync(reservation);
+    }
+
+    // Existing-reservation actions must not disclose or mutate another station's reservation.
+    private async Task<IActionResult?> AuthorizeReservationForOperatorAsync(ReservationResponse reservation)
+    {
+        if (!User.IsInRole("GridOperator"))
+        {
+            return null;
+        }
+
+        var (stationId, authorizationError) = await AuthorizeOperatorStationAsync(null);
+        if (authorizationError is not null)
+        {
+            return authorizationError;
+        }
+
+        if (!string.Equals(reservation.StationId, stationId, StringComparison.Ordinal))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                error = "Grid Operator is not assigned to this reservation's station."
+            });
+        }
+
+        return null;
     }
 
     // Reads the authenticated prosumer's immutable NIC claim for self-service requests.
