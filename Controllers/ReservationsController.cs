@@ -443,15 +443,17 @@ public class ReservationsController : ControllerBase
         }
     }
 
-    // Handles PUT /api/reservations/{id}/complete — transitions Approved to Completed and frees the slot.
+    // Handles Backoffice direct completion; Grid Operators must use the QR-protected scan-complete workflow.
     [HttpPut("{id}/complete")]
     [Authorize(Roles = "Backoffice,GridOperator")]
     public async Task<IActionResult> Complete(string id)
     {
-        var authorizationError = await AuthorizeReservationIdForOperatorAsync(id);
-        if (authorizationError is not null)
+        if (User.IsInRole("GridOperator"))
         {
-            return authorizationError;
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                error = "Grid Operators must complete energy transfers through QR verification."
+            });
         }
 
         var completedBy = User.FindFirstValue(ClaimTypes.Email) ?? User.Identity?.Name ?? "unknown";
