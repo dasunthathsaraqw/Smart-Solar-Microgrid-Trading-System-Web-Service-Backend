@@ -6,11 +6,14 @@
  */
 
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Serialization;
 
 namespace SmartMicrogrid.API.Models;
 
 public class UpdateUserRequest
 {
+    private string? _stationId;
+
     [StringLength(100, MinimumLength = 2)]
     public string? Name { get; set; }
 
@@ -25,4 +28,17 @@ public class UpdateUserRequest
     public string? Role { get; set; }
 
     public bool? IsActive { get; set; }
+
+    public string? StationId
+    {
+        get => _stationId;
+        set
+        {
+            _stationId = value;
+            StationIdSpecified = true;
+        }
+    }
+
+    [JsonIgnore]
+    public bool StationIdSpecified { get; private set; }
 }

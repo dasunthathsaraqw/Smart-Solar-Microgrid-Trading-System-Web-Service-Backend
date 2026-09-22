@@ -29,4 +29,6 @@ public class CreateUserRequest
     public string Role { get; set; } = string.Empty;
 
     public string? Nic { get; set; }
+
+    public string? StationId { get; set; }
 }
