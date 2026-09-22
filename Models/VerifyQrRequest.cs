@@ -12,9 +12,11 @@ namespace SmartMicrogrid.API.Models;
 
 public class VerifyQrRequest
 {
+    /// <summary>Opaque token read from the Approved reservation QR code.</summary>
     [Required]
     public string QrToken { get; set; } = string.Empty;
 
+    /// <summary>Station ObjectId where the QR is presented; must match the operator's persisted assignment.</summary>
     [Required]
     public string StationId { get; set; } = string.Empty;
 }

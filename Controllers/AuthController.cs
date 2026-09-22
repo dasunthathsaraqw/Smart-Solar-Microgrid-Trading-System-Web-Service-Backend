@@ -25,8 +25,21 @@ public class AuthController : ControllerBase
         _authService = authService;
     }
 
-    // Handles POST /api/auth/login — validates credentials and returns JWT + user info.
+    /// <summary>Authenticates an account and returns its JWT and current server-side identity context.</summary>
+    /// <remarks>
+    /// A successful GridOperator response includes the nullable persisted stationId. Invalid credentials return
+    /// 401; pending, inactive, or deactivated accounts return 403. Validation failures return 400.
+    /// </remarks>
+    /// <param name="request">Email address and password.</param>
+    /// <response code="200">Credentials accepted; returns token, identity, role, station assignment, and expiry.</response>
+    /// <response code="400">The request body fails validation.</response>
+    /// <response code="401">The credentials are invalid.</response>
+    /// <response code="403">The account is pending approval, inactive, or deactivated.</response>
     [HttpPost("login")]
+    [ProducesResponseType(typeof(LoginResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> Login([FromBody] LoginRequest request)
     {
         var (response, accountInactive) = await _authService.LoginAsync(request);
@@ -46,9 +59,18 @@ public class AuthController : ControllerBase
         return Ok(response);
     }
 
-    // Handles GET /api/auth/me — reloads current authenticated-user data using the signed user ID claim.
+    /// <summary>Returns the authenticated account's latest persisted identity and station context.</summary>
+    /// <remarks>
+    /// The server reloads the user by the signed NameIdentifier claim. For GridOperators, stationId comes from
+    /// persisted User data rather than client input or a JWT station claim, so assignment changes are immediately
+    /// visible. An unassigned GridOperator receives a null stationId.
+    /// </remarks>
+    /// <response code="200">Returns id, name, email, role, and nullable stationId.</response>
+    /// <response code="401">The token is missing/invalid, lacks a user ID, or references a deleted account.</response>
     [HttpGet("me")]
     [Authorize]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> Me()
     {
         var id = User.FindFirstValue(ClaimTypes.NameIdentifier);

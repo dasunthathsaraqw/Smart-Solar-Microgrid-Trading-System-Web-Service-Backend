@@ -11,10 +11,12 @@ namespace SmartMicrogrid.API.Models;
 
 public class LoginRequest
 {
+    /// <summary>Registered account email address.</summary>
     [Required]
     [EmailAddress]
     public string Email { get; set; } = string.Empty;
 
+    /// <summary>Account password.</summary>
     [Required]
     public string Password { get; set; } = string.Empty;
 }

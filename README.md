@@ -28,6 +28,14 @@ Optional demo data: set `Seeding__SeedSampleData=true` for the API process (or `
 
 These are public demo credentials: never enable sample seeding against a production database. See [DEPLOYMENT.md](DEPLOYMENT.md) for IIS setup, secrets, LAN bindings and troubleshooting.
 
+## Grid Operator / Energy Transfer Workflow
+
+GridOperators authenticate through `/api/auth/login` and can refresh their persisted station context through `/api/auth/me`. Dashboard, reservation management, and completed transaction history are automatically restricted to that assignment; unassigned operators and foreign-station requests receive `403`.
+
+Physical energy transfers use the QR workflow: validate the Prosumer's Approved reservation with `/api/reservations/verify-qr`, then confirm the transfer with `/api/reservations/scan-complete`. Successful scanning atomically records completion, invalidates the QR, releases the slot, and exposes the transaction in station-scoped history/dashboard data. GridOperators cannot bypass QR verification with `PUT /api/reservations/{id}/complete`; that route remains a Backoffice administrative path.
+
+See [Grid Operator API contract](docs/OPERATOR_WORKFLOW.md) for the complete sequence, request/response examples, dashboard and pagination fields, and error responses.
+
 ## Running the tests
 
 Prerequisite: A local MongoDB instance must be running (e.g. `mongodb://localhost:27017/`). Integration tests automatically create and clean up isolated test databases (`SmartSolarTests_*`).
@@ -99,10 +107,11 @@ dotnet test SmartMicrogrid.slnx
 | PUT | `/api/reservations/{id}` | BO, GO | Move pending reservation |
 | PUT | `/api/reservations/{id}/cancel` | BO, GO | Cancel reservation; BO can override notice rule |
 | PUT | `/api/reservations/{id}/approve` | BO, GO | Approve and issue QR token |
-| PUT | `/api/reservations/{id}/complete` | BO, GO | Complete and free slot |
+| PUT | `/api/reservations/{id}/complete` | BO; GO receives 403 | Administrative completion without QR scan |
 | GET | `/api/reservations/{id}/qr` | BO, GO | Get approved reservation QR token |
 | POST | `/api/reservations/verify-qr` | GO | Validate QR token at a station |
 | POST | `/api/reservations/scan-complete` | GO | Validate QR and complete atomically |
+| GET | `/api/reservations/operator/history` | GO | Assigned-station Completed transaction history |
 | GET | `/api/reservations/my` | P | List own reservations |
 | POST | `/api/reservations/my/search` | P | Search own reservations |
 | GET | `/api/reservations/my/{id}` | P | Get owned reservation |
@@ -117,5 +126,5 @@ dotnet test SmartMicrogrid.slnx
 | GET | `/api/reports/energy-traded` | BO, GO | Traded-energy chart |
 | GET | `/api/reports/recent-bookings` | BO, GO | Recent bookings |
 | GET | `/api/reports/pending-approvals` | BO, GO | Approval queue |
-| GET | `/api/reports/operator-dashboard` | BO, GO | Live operator dashboard |
+| GET | `/api/reports/operator-dashboard` | BO, GO | Live dashboard; GO automatically uses assigned station |
 | GET | `/api/reports/my-dashboard` | P | Live own-prosumer dashboard |
