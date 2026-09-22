@@ -41,7 +41,7 @@ public sealed class TestHelpers
     }
 
     // Creates a uniquely named station and asserts its POST response contains a persisted ID.
-    public async Task<StationResponse> CreateStationAsync(HttpClient admin, double latitude = 6.9271, double longitude = 79.8612)
+    public async Task<StationResponse> CreateStationAsync(HttpClient admin, double latitude = 6.9271, double longitude = 79.8612, string schedule = "Daily 00:00-23:59")
     {
         var response = await admin.PostAsJsonAsync("/api/stations", new
         {
@@ -50,7 +50,7 @@ public sealed class TestHelpers
             longitude,
             capacityKw = 85.5,
             availableSlots = 12,
-            schedule = "Daily 09:00-17:00",
+            schedule,
         });
         Assert.True(response.StatusCode == HttpStatusCode.Created, $"Station setup failed: {await response.Content.ReadAsStringAsync()}");
         var station = await response.Content.ReadFromJsonAsync<StationResponse>();

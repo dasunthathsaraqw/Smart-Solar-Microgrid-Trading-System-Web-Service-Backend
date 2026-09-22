@@ -29,7 +29,7 @@ public sealed class StationManagementTests
     public async Task Create_ValidStation_PersistsAllFields()
     {
         using var admin = await _helpers.LoginAsync("admin@smartsolar.com", "Admin@123");
-        var created = await _helpers.CreateStationAsync(admin, 7.2906, 80.6337);
+        var created = await _helpers.CreateStationAsync(admin, 7.2906, 80.6337, "Daily 09:00-17:00");
         var loaded = await admin.GetFromJsonAsync<StationResponse>($"/api/stations/{created.Id}");
         Assert.NotNull(loaded);
         Assert.Equal(7.2906, loaded.Latitude);
