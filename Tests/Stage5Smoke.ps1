@@ -152,6 +152,11 @@ $otherResponse = Invoke-Api 'POST' '/api/stations' @{
 Check-Status 'create other station' $otherResponse 201
 $otherStation = $otherResponse.Data
 
+$operatorAssignment = Invoke-Api 'PUT' "/api/users/$($operatorUser.Data.id)" @{
+    stationId = $mainStation.id
+} $adminToken
+Check-Status 'assign GridOperator to main station' $operatorAssignment 200
+
 $completionSlot = New-Slot 2
 $pendingSlot = New-Slot 4
 $approvedSlot = New-Slot 6
@@ -182,7 +187,7 @@ $wrongStation = Invoke-Api 'POST' '/api/reservations/scan-complete' @{
     qrToken = $qr
     stationId = $otherStation.id
 } $operatorToken
-Check-Status 'wrong station scan' $wrongStation 400
+Check-Status 'wrong station scan' $wrongStation 403
 $stillApproved = Invoke-Api 'GET' "/api/reservations/my/$($completionBooking.id)" $null $tokenA
 Check-Status 'reservation after wrong-station scan' $stillApproved 200
 Check-Value 'wrong-station scan preserved status' $stillApproved.Data.status 'Approved'
