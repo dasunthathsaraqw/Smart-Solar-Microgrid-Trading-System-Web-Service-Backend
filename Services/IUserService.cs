@@ -21,4 +21,9 @@ public interface IUserService
     Task<bool> ReactivateAsync(string id);
     Task<bool> EmailExistsAsync(string email, string? excludeId = null);
     Task<int> CountActiveBackofficesAsync();
+
+    // Resolves an operator's persisted station and rejects unassigned or foreign requested scopes.
+    Task<(bool UserExists, string? StationId, string? Error)> ResolveOperatorStationAsync(
+        string operatorId,
+        string? requestedStationId);
 }
