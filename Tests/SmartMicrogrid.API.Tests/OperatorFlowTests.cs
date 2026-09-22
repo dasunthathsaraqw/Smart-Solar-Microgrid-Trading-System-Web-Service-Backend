@@ -168,11 +168,11 @@ public sealed class OperatorFlowTests
     public async Task ScanComplete_ValidQr_CompletesFreesSlotAndRejectsReplay()
     {
         using var admin = await _helpers.LoginAsync("admin@smartsolar.com", "Admin@123");
-        var operatorAccount = await _helpers.CreateGridOperatorAsync(admin);
+        var station = await _helpers.CreateStationAsync(admin);
+        var operatorAccount = await _helpers.CreateGridOperatorAsync(admin, station.Id);
         var prosumer = await _helpers.RegisterAndApproveProsumerAsync(admin);
         using var operatorClient = operatorAccount.Client;
         using var prosumerClient = prosumer.Client;
-        var station = await _helpers.CreateStationAsync(admin);
         var slot = await _helpers.CreateSlotAsync(admin, station.Id, 2);
         var booking = await _helpers.BookAsync(prosumerClient, station.Id, slot.Id);
         await _helpers.ApproveAsync(admin, booking.Reservation.Id);
@@ -187,9 +187,89 @@ public sealed class OperatorFlowTests
         Assert.Equal(HttpStatusCode.BadRequest, replay.StatusCode);
     }
 
-    // Rule: presenting a valid QR at the wrong station leaves the reservation Approved.
+    // Rule: an assigned operator cannot verify or complete at another station, leaving QR, reservation and slot unchanged.
     [Fact]
-    public async Task ScanComplete_WrongStation_RejectsWithoutChangingReservation()
+    public async Task QrEndpoints_RequestForAnotherStation_RejectBeforeChangingReservation()
+    {
+        using var admin = await _helpers.LoginAsync("admin@smartsolar.com", "Admin@123");
+        var station = await _helpers.CreateStationAsync(admin);
+        var otherStation = await _helpers.CreateStationAsync(admin);
+        var operatorAccount = await _helpers.CreateGridOperatorAsync(admin, station.Id);
+        var prosumer = await _helpers.RegisterAndApproveProsumerAsync(admin);
+        using var operatorClient = operatorAccount.Client;
+        using var prosumerClient = prosumer.Client;
+        var slot = await _helpers.CreateSlotAsync(admin, station.Id, 2);
+        var booking = await _helpers.BookAsync(prosumerClient, station.Id, slot.Id);
+        await _helpers.ApproveAsync(admin, booking.Reservation.Id);
+        var token = (await prosumerClient.GetFromJsonAsync<Dictionary<string, string>>($"/api/reservations/my/{booking.Reservation.Id}/qr"))!["qrToken"];
+
+        var verifyRejected = await operatorClient.PostAsJsonAsync(
+            "/api/reservations/verify-qr",
+            new { qrToken = token, stationId = otherStation.Id });
+        var rejected = await operatorClient.PostAsJsonAsync("/api/reservations/scan-complete", new { qrToken = token, stationId = otherStation.Id });
+        Assert.Equal(HttpStatusCode.Forbidden, verifyRejected.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, rejected.StatusCode);
+        Assert.Equal("Approved", (await admin.GetFromJsonAsync<ReservationResponse>($"/api/reservations/{booking.Reservation.Id}"))!.Status);
+        var stored = await _factory.Database.GetCollection<EnergyReservation>("EnergyReservation")
+            .Find(reservation => reservation.Id == booking.Reservation.Id)
+            .FirstOrDefaultAsync();
+        Assert.Equal(token, stored.QrToken);
+        Assert.True((await admin.GetFromJsonAsync<SlotResponse>($"/api/slots/{slot.Id}"))!.IsBooked);
+    }
+
+    // Rule: an assigned operator can verify an Approved QR at the assigned station.
+    [Fact]
+    public async Task VerifyQr_AssignedStation_ReturnsApprovedReservation()
+    {
+        using var admin = await _helpers.LoginAsync("admin@smartsolar.com", "Admin@123");
+        var station = await _helpers.CreateStationAsync(admin);
+        var operatorAccount = await _helpers.CreateGridOperatorAsync(admin, station.Id);
+        var prosumer = await _helpers.RegisterAndApproveProsumerAsync(admin);
+        using var operatorClient = operatorAccount.Client;
+        using var prosumerClient = prosumer.Client;
+        var slot = await _helpers.CreateSlotAsync(admin, station.Id, 2);
+        var booking = await _helpers.BookAsync(prosumerClient, station.Id, slot.Id);
+        await _helpers.ApproveAsync(admin, booking.Reservation.Id);
+        var token = (await prosumerClient.GetFromJsonAsync<Dictionary<string, string>>($"/api/reservations/my/{booking.Reservation.Id}/qr"))!["qrToken"];
+
+        var response = await operatorClient.PostAsJsonAsync(
+            "/api/reservations/verify-qr",
+            new { qrToken = token, stationId = station.Id });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var verified = await response.Content.ReadFromJsonAsync<ReservationResponse>();
+        Assert.Equal(booking.Reservation.Id, verified!.Id);
+        Assert.Equal("Approved", verified.Status);
+    }
+
+    // Rule: assignment authorization passes first, while the existing QR-to-reservation station check still rejects a foreign QR.
+    [Fact]
+    public async Task VerifyQr_AssignedStationButForeignReservation_PreservesExistingStationValidation()
+    {
+        using var admin = await _helpers.LoginAsync("admin@smartsolar.com", "Admin@123");
+        var assignedStation = await _helpers.CreateStationAsync(admin);
+        var reservationStation = await _helpers.CreateStationAsync(admin);
+        var operatorAccount = await _helpers.CreateGridOperatorAsync(admin, assignedStation.Id);
+        var prosumer = await _helpers.RegisterAndApproveProsumerAsync(admin);
+        using var operatorClient = operatorAccount.Client;
+        using var prosumerClient = prosumer.Client;
+        var slot = await _helpers.CreateSlotAsync(admin, reservationStation.Id, 2);
+        var booking = await _helpers.BookAsync(prosumerClient, reservationStation.Id, slot.Id);
+        await _helpers.ApproveAsync(admin, booking.Reservation.Id);
+        var token = (await prosumerClient.GetFromJsonAsync<Dictionary<string, string>>($"/api/reservations/my/{booking.Reservation.Id}/qr"))!["qrToken"];
+
+        var response = await operatorClient.PostAsJsonAsync(
+            "/api/reservations/verify-qr",
+            new { qrToken = token, stationId = assignedStation.Id });
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var error = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>();
+        Assert.Equal("QR does not belong to this station", error!["error"]);
+        Assert.Equal("Approved", (await admin.GetFromJsonAsync<ReservationResponse>($"/api/reservations/{booking.Reservation.Id}"))!.Status);
+        Assert.True((await admin.GetFromJsonAsync<SlotResponse>($"/api/slots/{slot.Id}"))!.IsBooked);
+    }
+
+    // Rule: an unassigned GridOperator cannot verify or complete a QR at any station.
+    [Fact]
+    public async Task QrEndpoints_UnassignedOperator_ReturnForbiddenWithoutChangingReservation()
     {
         using var admin = await _helpers.LoginAsync("admin@smartsolar.com", "Admin@123");
         var operatorAccount = await _helpers.CreateGridOperatorAsync(admin);
@@ -197,14 +277,25 @@ public sealed class OperatorFlowTests
         using var operatorClient = operatorAccount.Client;
         using var prosumerClient = prosumer.Client;
         var station = await _helpers.CreateStationAsync(admin);
-        var otherStation = await _helpers.CreateStationAsync(admin);
         var slot = await _helpers.CreateSlotAsync(admin, station.Id, 2);
         var booking = await _helpers.BookAsync(prosumerClient, station.Id, slot.Id);
         await _helpers.ApproveAsync(admin, booking.Reservation.Id);
         var token = (await prosumerClient.GetFromJsonAsync<Dictionary<string, string>>($"/api/reservations/my/{booking.Reservation.Id}/qr"))!["qrToken"];
-        var rejected = await operatorClient.PostAsJsonAsync("/api/reservations/scan-complete", new { qrToken = token, stationId = otherStation.Id });
-        Assert.Equal(HttpStatusCode.BadRequest, rejected.StatusCode);
-        Assert.Equal("Approved", (await admin.GetFromJsonAsync<ReservationResponse>($"/api/reservations/{booking.Reservation.Id}"))!.Status);
+
+        var verify = await operatorClient.PostAsJsonAsync(
+            "/api/reservations/verify-qr",
+            new { qrToken = token, stationId = station.Id });
+        var complete = await operatorClient.PostAsJsonAsync(
+            "/api/reservations/scan-complete",
+            new { qrToken = token, stationId = station.Id });
+        Assert.Equal(HttpStatusCode.Forbidden, verify.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, complete.StatusCode);
+
+        var stored = await _factory.Database.GetCollection<EnergyReservation>("EnergyReservation")
+            .Find(reservation => reservation.Id == booking.Reservation.Id)
+            .FirstOrDefaultAsync();
+        Assert.Equal("Approved", stored.Status);
+        Assert.Equal(token, stored.QrToken);
         Assert.True((await admin.GetFromJsonAsync<SlotResponse>($"/api/slots/{slot.Id}"))!.IsBooked);
     }
 
@@ -213,11 +304,11 @@ public sealed class OperatorFlowTests
     public async Task ScanComplete_TwoConcurrentRequests_ExactlyOneSucceeds()
     {
         using var admin = await _helpers.LoginAsync("admin@smartsolar.com", "Admin@123");
-        var operatorAccount = await _helpers.CreateGridOperatorAsync(admin);
+        var station = await _helpers.CreateStationAsync(admin);
+        var operatorAccount = await _helpers.CreateGridOperatorAsync(admin, station.Id);
         var prosumer = await _helpers.RegisterAndApproveProsumerAsync(admin);
         using var operatorClient = operatorAccount.Client;
         using var prosumerClient = prosumer.Client;
-        var station = await _helpers.CreateStationAsync(admin);
         var slot = await _helpers.CreateSlotAsync(admin, station.Id, 2);
         var booking = await _helpers.BookAsync(prosumerClient, station.Id, slot.Id);
         await _helpers.ApproveAsync(admin, booking.Reservation.Id);
@@ -229,13 +320,14 @@ public sealed class OperatorFlowTests
         Assert.False((await admin.GetFromJsonAsync<SlotResponse>($"/api/slots/{slot.Id}"))!.IsBooked);
     }
 
-    // Rule: only GridOperators can scan and complete, not Prosumers or Backoffice users.
+    // Rule: only GridOperators can scan and complete, not Prosumers, Backoffice users or anonymous callers.
     [Fact]
-    public async Task ScanComplete_ProsumerOrBackoffice_ReturnsForbidden()
+    public async Task ScanComplete_ProsumerBackofficeOrAnonymous_IsRejected()
     {
         using var admin = await _helpers.LoginAsync("admin@smartsolar.com", "Admin@123");
         var prosumer = await _helpers.RegisterAndApproveProsumerAsync(admin);
         using var prosumerClient = prosumer.Client;
+        using var anonymousClient = _factory.CreateClient();
         var station = await _helpers.CreateStationAsync(admin);
         var slot = await _helpers.CreateSlotAsync(admin, station.Id, 2);
         var booking = await _helpers.BookAsync(prosumerClient, station.Id, slot.Id);
@@ -243,7 +335,9 @@ public sealed class OperatorFlowTests
         var token = (await prosumerClient.GetFromJsonAsync<Dictionary<string, string>>($"/api/reservations/my/{booking.Reservation.Id}/qr"))!["qrToken"];
         var prosumerResponse = await prosumerClient.PostAsJsonAsync("/api/reservations/scan-complete", new { qrToken = token, stationId = station.Id });
         var backofficeResponse = await admin.PostAsJsonAsync("/api/reservations/scan-complete", new { qrToken = token, stationId = station.Id });
+        var anonymousResponse = await anonymousClient.PostAsJsonAsync("/api/reservations/scan-complete", new { qrToken = token, stationId = station.Id });
         Assert.Equal(HttpStatusCode.Forbidden, prosumerResponse.StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, backofficeResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymousResponse.StatusCode);
     }
 }

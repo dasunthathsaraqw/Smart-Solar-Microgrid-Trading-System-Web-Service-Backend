@@ -100,8 +100,8 @@ public sealed class TestHelpers
         return new ProsumerAccount(await LoginAsync(email, password), nic, email, password);
     }
 
-    // Creates and logs in a distinct GridOperator account for role-gated test scenarios.
-    public async Task<OperatorAccount> CreateGridOperatorAsync(HttpClient admin)
+    // Creates and logs in a distinct GridOperator account, optionally assigned to a station.
+    public async Task<OperatorAccount> CreateGridOperatorAsync(HttpClient admin, string? stationId = null)
     {
         var email = $"operator-{Guid.NewGuid():N}@example.com";
         const string password = "Operator@Test123";
@@ -111,6 +111,7 @@ public sealed class TestHelpers
             email,
             password,
             role = "GridOperator",
+            stationId,
         });
         Assert.True(response.StatusCode == HttpStatusCode.Created, $"Operator setup failed: {await response.Content.ReadAsStringAsync()}");
         return new OperatorAccount(await LoginAsync(email, password), email, password);
