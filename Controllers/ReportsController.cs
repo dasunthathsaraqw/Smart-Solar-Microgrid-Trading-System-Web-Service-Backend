@@ -9,6 +9,7 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using SmartMicrogrid.API.Models;
 using SmartMicrogrid.API.Services;
 
 namespace SmartMicrogrid.API.Controllers;
@@ -84,9 +85,23 @@ public class ReportsController : ControllerBase
         return Ok(data);
     }
 
-    // Handles GET /api/reports/operator-dashboard for an optional station, retaining management-only access.
+    /// <summary>Returns current UTC-day activity and upcoming Approved reservations for operator work.</summary>
+    /// <remarks>
+    /// GridOperators may omit stationId to use their persisted assignment or supply the matching assignment.
+    /// A foreign stationId or missing assignment returns 403. Backoffice may omit stationId for system-wide data
+    /// or provide a station. Counts and upcoming reservations are calculated live.
+    /// </remarks>
+    /// <param name="stationId">Optional station ObjectId; automatically resolved for GridOperators.</param>
+    /// <response code="200">Returns operator dashboard counters and up to ten upcoming Approved reservations.</response>
+    /// <response code="400">The resolved/requested station does not exist.</response>
+    /// <response code="401">Authentication or the signed user identity is invalid.</response>
+    /// <response code="403">The role is not allowed, the operator is unassigned, or a foreign station was requested.</response>
     [HttpGet("operator-dashboard")]
     [Authorize(Roles = "GridOperator,Backoffice")]
+    [ProducesResponseType(typeof(OperatorDashboardResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> GetOperatorDashboard([FromQuery] string? stationId)
     {
         if (User.IsInRole("GridOperator"))
