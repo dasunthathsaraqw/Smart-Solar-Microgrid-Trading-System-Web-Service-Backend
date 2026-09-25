@@ -11,6 +11,7 @@ namespace SmartMicrogrid.API.Models;
 
 public class CreateOwnReservationRequest
 {
+    // Optional and ignored: the server replaces it with the NIC from the signed token (see CreateForProsumerAsync).
     public string? ProsumerNic { get; set; }
 
     [Required]
