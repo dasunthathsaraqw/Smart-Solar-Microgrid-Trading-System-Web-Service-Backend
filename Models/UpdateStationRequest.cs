@@ -9,6 +9,8 @@ using System.ComponentModel.DataAnnotations;
 
 namespace SmartMicrogrid.API.Models;
 
+// Every property is optional: a null (or, for text fields, blank) value means "leave unchanged". IsActive is not editable here;
+// it changes only through the deactivate/reactivate endpoints.
 public class UpdateStationRequest
 {
     [StringLength(100, MinimumLength = 3)]
