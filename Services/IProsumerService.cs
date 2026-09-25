@@ -23,7 +23,7 @@ public interface IProsumerService
     // Creates a Backoffice-managed prosumer profile.
     Task<ProsumerResponse> CreateAsync(CreateProsumerRequest request, string createdBy);
 
-    // Updates the Backoffice-editable fields for a specified prosumer.
+    // Updates the Backoffice-editable fields for a specified prosumer. Returns null when the NIC is unknown.
     Task<ProsumerResponse?> UpdateAsync(string nic, UpdateProsumerRequest request);
 
     // Updates the authenticated prosumer's permitted profile fields.
