@@ -27,12 +27,18 @@ public class AuthService : IAuthService
     // Validates credentials before reporting inactive accounts, avoiding an email-enumeration signal for wrong passwords.
     public async Task<(LoginResponse? Response, bool AccountInactive)> LoginAsync(LoginRequest request)
     {
+        // Exact-match lookup on the Users collection, which holds every login (Backoffice, GridOperator and Prosumer).
+        // The comparison is case-sensitive: the Users.email index has no collation.
         var user = await _db.Users.Find(u => u.Email == request.Email).FirstOrDefaultAsync();
+
+        // Unknown email and wrong password share one result, so the response does not reveal which emails exist.
+        // (An unknown email skips the BCrypt check, so response time can still differ slightly.)
         if (user is null || !_passwordHasher.Verify(request.Password, user.PasswordHash))
         {
             return (null, false);
         }
 
+        // Only reached with the correct password, so "inactive" (pending, deactivated) is disclosed only to the account owner. The controller maps it to 403.
         if (!user.IsActive)
         {
             return (null, true);
@@ -46,6 +52,7 @@ public class AuthService : IAuthService
             Name = user.Name,
             Email = user.Email,
             Role = user.Role,
+            // Station is read from the stored user, not the token, and only operators get one, so the app never sees a stale or foreign assignment.
             StationId = user.Role == "GridOperator" ? user.StationId : null,
             ExpiresAt = expiresAt,
         }, false);
