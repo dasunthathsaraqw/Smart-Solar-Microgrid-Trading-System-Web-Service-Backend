@@ -18,10 +18,13 @@ public class BulkCreateSlotRequest
     [Required]
     public DateTime SlotDate { get; set; }
 
+    // Times of day (e.g. "06:00:00") for the first slot start and the last slot end, applied to SlotDate. Not [Required], so an omitted value
+    // becomes 00:00 and the service then rejects an end that is not after the start.
     public TimeSpan StartTime { get; set; }
 
     public TimeSpan EndTime { get; set; }
 
+    // 30 to 480 minutes, the same 30-minute to 8-hour bounds SlotService applies to single slots.
     [Range(30, 480, ErrorMessage = "Slot duration must be between 30 minutes and 8 hours.")]
     public int SlotDurationMinutes { get; set; }
 
