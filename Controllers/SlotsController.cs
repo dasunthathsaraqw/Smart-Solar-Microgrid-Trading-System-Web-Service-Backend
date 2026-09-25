@@ -77,6 +77,7 @@ public class SlotsController : ControllerBase
             return stationAuthorizationError;
         }
 
+        // Non-null here: operators get their assigned station and everyone else keeps the {stationId} route value.
         var slots = await _slotService.GetByStationAsync(authorizedStationId!);
         return Ok(slots);
     }
@@ -87,6 +88,7 @@ public class SlotsController : ControllerBase
     [Authorize(Roles = "Backoffice,GridOperator,Prosumer")]
     public async Task<IActionResult> GetAvailableByStation(string stationId)
     {
+        // Prosumers pass straight through (any active station is bookable); only Grid Operators are limited to their own.
         var (authorizedStationId, stationAuthorizationError) = await ResolveManagementStationScopeAsync(stationId);
         if (stationAuthorizationError is not null)
         {
@@ -110,6 +112,7 @@ public class SlotsController : ControllerBase
     [Authorize(Roles = "Backoffice,GridOperator")]
     public async Task<IActionResult> Create([FromBody] CreateSlotRequest request)
     {
+        // Only the authorization result is needed: for an operator the check fails unless request.StationId is their own station, so it can be used as-is.
         var (_, stationAuthorizationError) = await ResolveManagementStationScopeAsync(request.StationId);
         if (stationAuthorizationError is not null)
         {
@@ -149,6 +152,7 @@ public class SlotsController : ControllerBase
 
         try
         {
+            // 201 with the slots that were actually created; slots skipped as overlapping or out of range are simply absent (an empty list is possible).
             var slots = await _slotService.BulkCreateAsync(request, createdBy);
             return StatusCode(StatusCodes.Status201Created, slots);
         }
@@ -263,6 +267,7 @@ public class SlotsController : ControllerBase
             return null;
         }
 
+        // The operator's own station is resolved first, then the slot is loaded to compare stations.
         var (stationId, stationAuthorizationError) = await AuthorizeOperatorStationAsync(null);
         if (stationAuthorizationError is not null)
         {
@@ -275,6 +280,7 @@ public class SlotsController : ControllerBase
             return NotFound();
         }
 
+        // A slot at another station returns 403 (not 404), so unlike the prosumer reservation endpoints it does reveal that the slot exists.
         if (!string.Equals(slot.StationId, stationId, StringComparison.Ordinal))
         {
             return StatusCode(StatusCodes.Status403Forbidden, new
