@@ -23,6 +23,7 @@ public class Prosumer
     [BsonElement("name")]
     public string Name { get; set; } = string.Empty;
 
+    // Also the login email for self-registered prosumers, so it is kept in sync with the Users document.
     [BsonElement("email")]
     public string Email { get; set; } = string.Empty;
 
@@ -32,9 +33,11 @@ public class Prosumer
     [BsonElement("address")]
     public string Address { get; set; } = string.Empty;
 
+    // Installed solar panel capacity in kilowatts.
     [BsonElement("panelCapacityKw")]
     public double PanelCapacityKw { get; set; }
 
+    // Hashed, never plain text; never returned to clients (see ProsumerResponse). Mirrors the hash on the matching Users document.
     [BsonElement("passwordHash")]
     public string PasswordHash { get; set; } = string.Empty;
 
@@ -50,9 +53,11 @@ public class Prosumer
     [BsonElement("createdAt")]
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
+    // "self-registration" for mobile sign-ups, otherwise the email of the Backoffice user who created the profile.
     [BsonElement("createdBy")]
     public string CreatedBy { get; set; } = string.Empty;
 
+    // Null until the first edit or lifecycle change (approval, deactivation request, password change).
     [BsonElement("updatedAt")]
     public DateTime? UpdatedAt { get; set; }
 }
