@@ -34,6 +34,8 @@ public class SlotService : ISlotService
         var now = DateTime.UtcNow;
         switch (status?.ToLowerInvariant())
         {
+            // Status is derived from IsBooked and the clock. "available" uses EndTime, so a slot already in progress still counts here,
+            // whereas GetAvailableByStationAsync (the prosumer view) requires StartTime in the future.
             case "available":
                 filters.Add(Builders<EnergyBookingSlot>.Filter.Eq(s => s.IsBooked, false));
                 filters.Add(Builders<EnergyBookingSlot>.Filter.Gt(s => s.EndTime, now));
@@ -41,6 +43,7 @@ public class SlotService : ISlotService
             case "booked":
                 filters.Add(Builders<EnergyBookingSlot>.Filter.Eq(s => s.IsBooked, true));
                 break;
+            // "past" ignores IsBooked, so it also lists booked slots that have ended; an unknown status applies no status filter.
             case "past":
                 filters.Add(Builders<EnergyBookingSlot>.Filter.Lte(s => s.EndTime, now));
                 break;
@@ -68,8 +71,10 @@ public class SlotService : ISlotService
     // Returns only unbooked future slots within seven days after confirming the station is active.
     public async Task<List<SlotResponse>> GetAvailableByStationAsync(string stationId)
     {
+        // Fails for an unknown or deactivated station so a prosumer cannot browse slots at a station that is out of service.
         await GetActiveStationOrThrowAsync(stationId);
 
+        // The 7-day window matches the reservation booking rule, so every slot returned here can actually be booked.
         var now = DateTime.UtcNow;
         var sevenDaysFromNow = now.AddDays(7);
         var filter = Builders<EnergyBookingSlot>.Filter.And(
@@ -82,13 +87,16 @@ public class SlotService : ISlotService
         return slots.Select(ToResponse).ToList();
     }
 
+    // Creates one slot after checking the station is active, the timing rules, the station's operating schedule and overlap.
     public async Task<SlotResponse> CreateAsync(CreateSlotRequest request, string createdBy)
     {
         var station = await GetActiveStationOrThrowAsync(request.StationId);
 
+        // Order matters: cheap in-memory checks (timing, schedule) run before the overlap query hits the database.
         ValidateTiming(request.StartTime, request.EndTime);
         ScheduleValidator.ValidateSlotAgainstSchedule(request.StartTime, request.EndTime, station.Schedule);
 
+        // Overlap is the only failure reported as 409 (SlotOverlapException); the rest are 400.
         if (await HasOverlapAsync(request.StationId, request.StartTime, request.EndTime))
         {
             throw new SlotOverlapException("Slot overlaps with an existing slot");
@@ -97,6 +105,7 @@ public class SlotService : ISlotService
         var slot = new EnergyBookingSlot
         {
             StationId = request.StationId,
+            // StationName is copied in so slot lists need no station lookup; SlotDate is reduced to its date part.
             StationName = station.StationName,
             SlotDate = request.SlotDate.Date,
             StartTime = request.StartTime,
@@ -122,6 +131,8 @@ public class SlotService : ISlotService
             throw new InvalidOperationException("Day end time must be after day start time");
         }
 
+        // StartTime/EndTime are times of day laid onto SlotDate. The results are compared with UTC "now" and validated as UTC by ScheduleValidator,
+        // so the times of day are effectively treated as UTC.
         var slotDate = request.SlotDate.Date;
         var dayStart = slotDate.Add(request.StartTime);
         var dayEnd = slotDate.Add(request.EndTime);
@@ -132,6 +143,7 @@ public class SlotService : ISlotService
         var created = new List<EnergyBookingSlot>();
         var cursor = dayStart;
 
+        // Walk the day in fixed steps; a final partial interval that would run past dayEnd is dropped, not shortened.
         while (cursor.Add(duration) <= dayEnd)
         {
             var slotStart = cursor;
@@ -145,7 +157,9 @@ public class SlotService : ISlotService
                 continue;
             }
 
-            // Reject the entire batch atomically if any generated slot falls outside the station's operating schedule
+            // Reject the entire batch atomically if any generated slot falls outside the station's operating schedule.
+            // Nothing has been inserted yet at this point (InsertManyAsync runs after the loop), so a throw here leaves no partial batch behind.
+            // Past and beyond-30-day slots were skipped above, so they are never checked against the schedule.
             ScheduleValidator.ValidateSlotAgainstSchedule(slotStart, slotEnd, station.Schedule);
 
             if (created.Any(s => s.StartTime < slotEnd && s.EndTime > slotStart))
@@ -189,24 +203,28 @@ public class SlotService : ISlotService
             return null;
         }
 
+        // A booked slot has a reservation pointing at its times, so moving it would silently change that booking.
         if (slot.IsBooked)
         {
             throw new InvalidOperationException("Cannot modify a booked slot");
         }
 
+        // Unsupplied bounds fall back to the stored ones, so changing only one end is validated as the resulting whole window.
         var newStart = request.StartTime ?? slot.StartTime;
         var newEnd = request.EndTime ?? slot.EndTime;
 
         if (request.StartTime.HasValue || request.EndTime.HasValue)
         {
             ValidateTiming(newStart, newEnd);
-            
+
+            // Unlike CreateAsync, a missing station skips the schedule check instead of failing, and the station is not required to be active.
             var station = await _db.Stations.Find(st => st.Id == slot.StationId).FirstOrDefaultAsync();
             if (station != null)
             {
                 ScheduleValidator.ValidateSlotAgainstSchedule(newStart, newEnd, station.Schedule);
             }
 
+            // The slot's own id is excluded so it does not overlap with itself.
             if (await HasOverlapAsync(slot.StationId, newStart, newEnd, id))
             {
                 throw new SlotOverlapException("Slot overlaps with an existing slot");
@@ -261,6 +279,8 @@ public class SlotService : ISlotService
     // Checks whether the given time window overlaps any existing slot for the same station.
     public async Task<bool> HasOverlapAsync(string stationId, DateTime startTime, DateTime endTime, string? excludeId = null)
     {
+        // Standard interval test: existing.Start < newEnd AND existing.End > newStart. The comparisons are strict, so
+        // back-to-back slots (one ends exactly when the next starts) are allowed.
         var filter = Builders<EnergyBookingSlot>.Filter.And(
             Builders<EnergyBookingSlot>.Filter.Eq(s => s.StationId, stationId),
             Builders<EnergyBookingSlot>.Filter.Lt(s => s.StartTime, endTime),
@@ -290,6 +310,7 @@ public class SlotService : ISlotService
     // Enforces the shared timing rules: must be in the future, within 30 days, and 30min-8hr long.
     private static void ValidateTiming(DateTime startTime, DateTime endTime)
     {
+        // The 30-day horizon limits how far ahead slots can be created; prosumers can still only book slots starting within 7 days.
         var now = DateTime.UtcNow;
 
         if (startTime <= now)
@@ -307,6 +328,7 @@ public class SlotService : ISlotService
             throw new InvalidOperationException("End time must be after start time");
         }
 
+        // Bounds are inclusive: exactly 30 minutes and exactly 8 hours are both accepted (matches BulkCreateSlotRequest's 30-480 range).
         var duration = endTime - startTime;
         if (duration < TimeSpan.FromMinutes(30) || duration > TimeSpan.FromHours(8))
         {
