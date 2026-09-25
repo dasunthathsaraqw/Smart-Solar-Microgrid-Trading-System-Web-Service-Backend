@@ -10,6 +10,7 @@ using System.Text.Json.Serialization;
 
 namespace SmartMicrogrid.API.Models;
 
+// Every property is optional; only supplied values change. StationId is the exception to "null means unchanged" (see below).
 public class UpdateUserRequest
 {
     private string? _stationId;
@@ -29,6 +30,8 @@ public class UpdateUserRequest
 
     public bool? IsActive { get; set; }
 
+    // Needs a "was it sent?" flag because an omitted field and an explicit null both deserialize to null, yet they mean different things:
+    // omitted keeps the current station, while an explicit null (or blank) unassigns it. The setter only runs when the JSON contains the property.
     public string? StationId
     {
         get => _stationId;
@@ -39,6 +42,7 @@ public class UpdateUserRequest
         }
     }
 
+    // Set by the StationId setter above; hidden from JSON so clients cannot supply it directly.
     [JsonIgnore]
     public bool StationIdSpecified { get; private set; }
 }
