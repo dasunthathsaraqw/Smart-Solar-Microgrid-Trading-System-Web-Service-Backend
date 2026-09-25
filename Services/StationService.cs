@@ -27,6 +27,7 @@ public class StationService : IStationService
     // Returns stations filtered by "active" | "deactivated", or all when status is null/unknown.
     public async Task<List<StationResponse>> GetAllAsync(string? status)
     {
+        // Unlike prosumers, a station's status is stored directly as IsActive, so each label maps to a single flag value.
         FilterDefinition<SolarStationInfo> filter = status?.ToLowerInvariant() switch
         {
             "active" => Builders<SolarStationInfo>.Filter.Eq(s => s.IsActive, true),
@@ -52,6 +53,7 @@ public class StationService : IStationService
         double radiusKm,
         int limit)
     {
+        // Query parameters are not covered by model validation attributes, so the ranges are checked here (the controller maps these errors to 400).
         if (latitude < -90 || latitude > 90)
         {
             throw new InvalidOperationException("Latitude must be between -90 and 90.");
@@ -74,6 +76,7 @@ public class StationService : IStationService
 
         // A production-scale dataset should use a MongoDB 2dsphere index and $geoNear. Service-layer
         // haversine keeps this small dataset's business logic centralized without an index migration.
+        // Distance is computed for every active station in memory, then filtered by radius, sorted nearest-first and capped by limit.
         var activeStations = await _db.Stations.Find(s => s.IsActive).ToListAsync();
         var nearbyStations = activeStations
             .Select(station => new
@@ -91,6 +94,8 @@ public class StationService : IStationService
             return [];
         }
 
+        // One slot query for all returned stations (not one per station). The window matches the 7-day booking rule,
+        // so the count reflects slots a prosumer could actually book.
         var stationIds = nearbyStations.Select(result => result.Station.Id).ToList();
         var now = DateTime.UtcNow;
         var sevenDaysFromNow = now.AddDays(7);
@@ -105,6 +110,7 @@ public class StationService : IStationService
             .GroupBy(slot => slot.StationId)
             .ToDictionary(group => group.Key, group => group.Count());
 
+        // A station with no matching slots has no dictionary entry, so it gets a count of 0 rather than being dropped from the results.
         return nearbyStations.Select(result => ToNearbyResponse(
             result.Station,
             result.DistanceKm,
@@ -119,6 +125,8 @@ public class StationService : IStationService
             throw new InvalidOperationException("Station name already exists");
         }
 
+        // AvailableSlots is a figure supplied by Backoffice and stored as-is; it is not recalculated from the Slots collection
+        // (the nearby search computes its own live AvailableSlotCount instead).
         var station = new SolarStationInfo
         {
             StationName = request.StationName,
@@ -136,6 +144,8 @@ public class StationService : IStationService
         {
             await _db.Stations.InsertOneAsync(station);
         }
+        // 11000 is MongoDB's duplicate-key code. The NameExistsAsync check above can lose a race with a concurrent create,
+        // so the unique case-insensitive index on stationName is the final guard and is reported the same way.
         catch (MongoWriteException ex) when (ex.WriteError.Code == 11000)
         {
             throw new InvalidOperationException("Station name already exists", ex);
@@ -152,6 +162,7 @@ public class StationService : IStationService
             return null;
         }
 
+        // Skipped when only the casing of its own name changes, and excludes this station's id so it never collides with itself.
         if (!string.IsNullOrWhiteSpace(request.StationName)
             && !string.Equals(request.StationName, station.StationName, StringComparison.OrdinalIgnoreCase)
             && await NameExistsAsync(request.StationName, id))
@@ -159,6 +170,8 @@ public class StationService : IStationService
             throw new InvalidOperationException("Station name already exists");
         }
 
+        // Partial update: only supplied fields are changed. Note that slots and reservations hold their own copy of StationName,
+        // and this method does not propagate a rename to them.
         var updates = new List<UpdateDefinition<SolarStationInfo>>();
 
         if (!string.IsNullOrWhiteSpace(request.StationName))
@@ -217,6 +230,7 @@ public class StationService : IStationService
             return (false, "Station not found");
         }
 
+        // "Active" here means Approved only; Pending reservations do not block deactivation.
         if (await HasActiveReservationsAsync(id))
         {
             return (false, "Cannot deactivate: active reservations exist");
@@ -244,6 +258,7 @@ public class StationService : IStationService
     // Checks whether a station name is already in use (case-insensitive), optionally excluding one station's own id.
     public async Task<bool> NameExistsAsync(string stationName, string? excludeId = null)
     {
+        // Anchored (^...$) and escaped so only an exact name matches, ignoring case, with no regex characters interpreted.
         var nameFilter = Builders<SolarStationInfo>.Filter.Regex(
             s => s.StationName,
             new BsonRegularExpression($"^{Regex.Escape(stationName)}$", "i")
@@ -301,6 +316,7 @@ public class StationService : IStationService
             CreatedAt = station.CreatedAt,
             CreatedBy = station.CreatedBy,
             UpdatedAt = station.UpdatedAt,
+            // Rounded for display only; filtering and ordering already used the unrounded distance.
             DistanceKm = Math.Round(distanceKm, 2, MidpointRounding.AwayFromZero),
             AvailableSlotCount = availableSlotCount,
         };
@@ -326,6 +342,7 @@ public class StationService : IStationService
             + Math.Cos(originLatitudeRadians)
             * Math.Cos(destinationLatitudeRadians)
             * Math.Pow(Math.Sin(longitudeDifferenceRadians / 2), 2);
+        // Floating-point error can push the value marginally above 1 (near antipodal points), which would make Math.Sqrt(1 - h) return NaN.
         var boundedHaversine = Math.Clamp(haversine, 0, 1);
         var centralAngle = 2 * Math.Atan2(
             Math.Sqrt(boundedHaversine),
