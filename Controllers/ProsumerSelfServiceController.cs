@@ -36,6 +36,7 @@ public class ProsumerSelfServiceController : ControllerBase
         }
         catch (InvalidOperationException ex)
         {
+            // Duplicate NIC/email is reported as 400 here (the Backoffice create endpoint uses 409).
             return BadRequest(new { message = ex.Message });
         }
     }
@@ -52,6 +53,7 @@ public class ProsumerSelfServiceController : ControllerBase
             return Unauthorized(new { message = "The access token does not contain a NIC claim." });
         }
 
+        // 404 covers a valid token whose profile no longer exists.
         var prosumer = await _prosumerService.GetByNicAsync(nic);
         return prosumer is null ? NotFound() : Ok(prosumer);
     }
@@ -75,6 +77,7 @@ public class ProsumerSelfServiceController : ControllerBase
         }
         catch (InvalidOperationException ex)
         {
+            // Raised for a duplicate email or a missing linked credential account.
             return BadRequest(new { message = ex.Message });
         }
     }
@@ -94,6 +97,7 @@ public class ProsumerSelfServiceController : ControllerBase
         var changed = await _prosumerService.ChangePasswordAsync(nic, request);
         if (!changed)
         {
+            // 400, not 401: the caller is authenticated, only the supplied current password is wrong.
             return BadRequest(new { message = "Current password is incorrect." });
         }
 
@@ -115,6 +119,7 @@ public class ProsumerSelfServiceController : ControllerBase
         var (success, error) = await _prosumerService.RequestDeactivationAsync(nic);
         if (!success)
         {
+            // The service supplies a readable reason (not found, already inactive, or open reservations) for the app to display.
             return BadRequest(new { message = error });
         }
 
