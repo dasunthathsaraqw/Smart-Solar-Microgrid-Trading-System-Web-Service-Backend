@@ -16,15 +16,18 @@ public class User
     [BsonRepresentation(BsonType.ObjectId)]
     public string Id { get; set; } = string.Empty;
 
+    // Set only for prosumer login accounts, where it links to the Prosumers profile and is copied into the JWT "nic" claim. Null for staff.
     [BsonElement("nic")]
     public string? Nic { get; set; }
 
     [BsonElement("name")]
     public string Name { get; set; } = string.Empty;
 
+    // The login identifier. Has a unique index, but the index is case-sensitive; UserService additionally checks case-insensitively.
     [BsonElement("email")]
     public string Email { get; set; } = string.Empty;
 
+    // BCrypt hash, never the password itself. Excluded from every response model.
     [BsonElement("passwordHash")]
     public string PasswordHash { get; set; } = string.Empty;
 
@@ -32,10 +35,12 @@ public class User
     [BsonElement("role")]
     public string Role { get; set; } = string.Empty;
 
+    // Station a GridOperator is assigned to, which scopes everything they can see or do. Absent (not stored as null) when unassigned or for other roles.
     [BsonElement("stationId")]
     [BsonIgnoreIfNull]
     public string? StationId { get; set; }
 
+    // Login gate: an inactive account is refused at login with 403. Staff start active; prosumer accounts start inactive until approved.
     [BsonElement("isActive")]
     public bool IsActive { get; set; } = true;
 
