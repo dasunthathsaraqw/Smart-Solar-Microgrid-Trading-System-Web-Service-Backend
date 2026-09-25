@@ -23,18 +23,23 @@ public class EnergyBookingSlot
     [BsonElement("stationName")]
     public string StationName { get; set; } = string.Empty;
 
+    // Calendar day the slot belongs to (time part is dropped on creation).
     [BsonElement("slotDate")]
     public DateTime SlotDate { get; set; }
 
+    // Full date-time window of the slot, treated as UTC. Slots at one station may not overlap, but may touch end-to-start.
     [BsonElement("startTime")]
     public DateTime StartTime { get; set; }
 
     [BsonElement("endTime")]
     public DateTime EndTime { get; set; }
 
+    // Energy capacity in kilowatts offered in this slot; copied into a reservation when it is booked.
     [BsonElement("capacityKw")]
     public double CapacityKw { get; set; }
 
+    // Locking flag flipped by ReservationService: true while a Pending/Approved reservation holds the slot, false again on cancel or completion.
+    // A booked slot cannot be edited or deleted.
     [BsonElement("isBooked")]
     public bool IsBooked { get; set; } = false;
 
