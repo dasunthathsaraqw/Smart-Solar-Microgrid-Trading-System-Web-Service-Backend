@@ -29,10 +29,12 @@ public class ProsumerReportsController : ControllerBase
     [Authorize(Roles = "Prosumer")]
     public async Task<IActionResult> GetMyDashboard()
     {
+        // The NIC must come from the signed token, never client-controlled route or body data.
         var nic = User.FindFirst("nic")?.Value;
         if (string.IsNullOrWhiteSpace(nic))
         {
-            return Unauthorized(new { error = "The access token does not contain a NIC claim." });
+            // This controller uses the { error } shape, while the profile endpoints use { message }.
+            return Unauthorized(new { error ="The access token does not contain a NIC claim." });
         }
 
         var dashboard = await _reportService.GetProsumerDashboardAsync(nic);
