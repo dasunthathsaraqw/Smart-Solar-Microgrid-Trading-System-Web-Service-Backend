@@ -16,9 +16,11 @@ public class CreateSlotRequest
     [Required]
     public string StationId { get; set; } = string.Empty;
 
+    // Only the date part is stored; the actual window comes from StartTime and EndTime below.
     [Required]
     public DateTime SlotDate { get; set; }
 
+    // Full date-time values (unlike BulkCreateSlotRequest, which takes times of day). Must also fall inside the station's operating schedule.
     [Required]
     public DateTime StartTime { get; set; }
 
