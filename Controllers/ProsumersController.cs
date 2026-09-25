@@ -54,6 +54,7 @@ public class ProsumersController : ControllerBase
     [HttpGet("{nic}")]
     public async Task<IActionResult> GetByNic(string nic)
     {
+        // "pending" and "pending-deactivations" are literal routes and take precedence over this {nic} parameter, so they are never read as NICs.
         var prosumer = await _prosumerService.GetByNicAsync(nic);
         if (prosumer is null)
         {
@@ -67,6 +68,7 @@ public class ProsumersController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateProsumerRequest request)
     {
+        // Audit trail: prefer the caller's email claim, then their identity name, so CreatedBy is never empty.
         var createdBy = User.FindFirstValue(ClaimTypes.Email) ?? User.Identity?.Name ?? "unknown";
 
         try
@@ -76,6 +78,7 @@ public class ProsumersController : ControllerBase
         }
         catch (InvalidOperationException ex)
         {
+            // Duplicate NIC/email is a state conflict (409), unlike self-registration which returns 400.
             return Conflict(new { message = ex.Message });
         }
     }
@@ -107,6 +110,7 @@ public class ProsumersController : ControllerBase
         var success = await _prosumerService.DeactivateAsync(nic);
         if (!success)
         {
+            // The service returns false only when no prosumer matches the NIC.
             return NotFound();
         }
 
@@ -120,6 +124,7 @@ public class ProsumersController : ControllerBase
         var success = await _prosumerService.ReactivateAsync(nic);
         if (!success)
         {
+            // The service returns false only when no prosumer matches the NIC.
             return NotFound();
         }
 
