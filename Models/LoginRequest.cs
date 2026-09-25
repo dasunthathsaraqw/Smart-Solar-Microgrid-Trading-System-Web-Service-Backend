@@ -11,6 +11,7 @@ namespace SmartMicrogrid.API.Models;
 
 public class LoginRequest
 {
+    // Matched exactly as typed (case-sensitive); the same email casing used at registration must be used to log in.
     /// <summary>Registered account email address.</summary>
     [Required]
     [EmailAddress]
