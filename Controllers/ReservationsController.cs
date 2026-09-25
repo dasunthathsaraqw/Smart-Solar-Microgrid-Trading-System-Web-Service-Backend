@@ -40,6 +40,7 @@ public class ReservationsController : ControllerBase
     [Authorize(Roles = "Backoffice,GridOperator")]
     public async Task<IActionResult> GetAll([FromQuery] string? status, [FromQuery] string? stationId, [FromQuery] string? prosumerNic)
     {
+        // Grid Operators are pinned to their own station whatever stationId they pass; Backoffice keeps the station it asked for.
         var (authorizedStationId, authorizationError) = await ResolveManagementStationScopeAsync(stationId);
         if (authorizationError is not null)
         {
@@ -136,6 +137,7 @@ public class ReservationsController : ControllerBase
             return NotFound();
         }
 
+        // The reservation is loaded first so an operator can be checked against its station; Backoffice passes through.
         var authorizationError = await AuthorizeReservationForOperatorAsync(reservation);
         if (authorizationError is not null)
         {
@@ -216,6 +218,7 @@ public class ReservationsController : ControllerBase
 
         try
         {
+            // Any NIC in the body is ignored: CreateForProsumerAsync overwrites it with the token's NIC.
             var reservationRequest = new CreateReservationRequest
             {
                 ProsumerNic = request.ProsumerNic ?? string.Empty,
@@ -228,6 +231,7 @@ public class ReservationsController : ControllerBase
         }
         catch (ReservationConflictException ex)
         {
+            // Slot already booked: 409 so the app can tell "pick another slot" apart from other validation failures (400).
             return Conflict(new { error = ex.Message });
         }
         catch (InvalidOperationException ex)
@@ -255,6 +259,7 @@ public class ReservationsController : ControllerBase
 
         try
         {
+            // The prosumer's NIC is recorded as the actor in place of an email.
             var reservation = await _reservationService.UpdateAsync(id, request, nic);
             return reservation is null
                 ? NotFound()
@@ -317,6 +322,7 @@ public class ReservationsController : ControllerBase
             return NotFound();
         }
 
+        // No token (reservation not yet approved, or already completed/cancelled) is reported as 404, not as an error explaining why.
         var token = await _reservationService.GetQrTokenAsync(id);
         return token is null ? NotFound() : Ok(new { qrToken = token });
     }
@@ -332,6 +338,8 @@ public class ReservationsController : ControllerBase
             return authorizationError;
         }
 
+        // Replaces the requested station with the authorized one, so an operator cannot book at another station.
+        // The null-forgiving operator is safe: Backoffice keeps the [Required] StationId, and operators are only let through with a resolved station.
         request.StationId = authorizedStationId!;
         var createdBy = User.FindFirstValue(ClaimTypes.Email) ?? User.Identity?.Name ?? "unknown";
 
@@ -369,6 +377,8 @@ public class ReservationsController : ControllerBase
                 return authorizationError;
             }
 
+            // The reservation's current station was checked above; the target slot must also be at the operator's station.
+            // An unknown slot skips this check and is reported by the service as "Slot not found".
             var destinationSlot = await _slotService.GetByIdAsync(request.NewSlotId);
             if (destinationSlot is not null &&
                 !string.Equals(destinationSlot.StationId, existingReservation.StationId, StringComparison.Ordinal))
@@ -414,6 +424,7 @@ public class ReservationsController : ControllerBase
         }
 
         var cancelledBy = User.FindFirstValue(ClaimTypes.Email) ?? User.Identity?.Name ?? "unknown";
+        // Only Backoffice may bypass the 12-hour notice rule; Grid Operators are held to it.
         var isBackoffice = User.IsInRole("Backoffice");
 
         try
@@ -608,6 +619,7 @@ public class ReservationsController : ControllerBase
             return stationAuthorizationError;
         }
 
+        // The completion is audited by email, so a token without one is rejected instead of falling back to "unknown".
         var completedBy = User.FindFirstValue(ClaimTypes.Email);
         if (completedBy is null)
         {
@@ -627,6 +639,8 @@ public class ReservationsController : ControllerBase
             return (null, Unauthorized(new { error = "The access token does not contain a user ID claim." }));
         }
 
+        // Two failure levels: the operator account no longer exists (401, the token is stale), versus the account
+        // exists but has no station or asked for another one (403, authenticated but not allowed).
         var (userExists, stationId, error) = await _userService.ResolveOperatorStationAsync(operatorId, requestStationId);
         if (!userExists)
         {
@@ -675,6 +689,7 @@ public class ReservationsController : ControllerBase
             return null;
         }
 
+        // Passing null asks for the operator's own persisted station, which the reservation must then belong to.
         var (stationId, authorizationError) = await AuthorizeOperatorStationAsync(null);
         if (authorizationError is not null)
         {
