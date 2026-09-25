@@ -30,9 +30,11 @@ public class CreateProsumerRequest
     [Required]
     public string Address { get; set; } = string.Empty;
 
+    // Panel capacity in kW.
     [Range(0.01, 100000, ErrorMessage = "Panel capacity must be greater than 0.")]
     public double PanelCapacityKw { get; set; }
 
+    // Plain text in transit only; the service hashes it before storing. Minimum is 6 here versus 8 in RegisterProsumerRequest.
     [Required]
     [MinLength(6)]
     public string Password { get; set; } = string.Empty;
