@@ -10,6 +10,7 @@ using System.ComponentModel.DataAnnotations;
 
 namespace SmartMicrogrid.API.Models;
 
+// Every property is nullable: a null or blank value means "leave unchanged", so callers send only the fields they want to edit.
 public class UpdateProsumerRequest
 {
     public string? Name { get; set; }
