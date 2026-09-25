@@ -12,6 +12,7 @@ namespace SmartMicrogrid.API.Models;
 
 public class UpdateReservationRequest
 {
+    // Must be an unbooked future slot at the reservation's own station; the service enforces this, not the model.
     [Required]
     public string NewSlotId { get; set; } = string.Empty;
 }
