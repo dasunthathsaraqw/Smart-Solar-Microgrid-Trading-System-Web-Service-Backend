@@ -18,6 +18,7 @@ namespace SmartMicrogrid.API.Services;
 
 public class ReservationService : IReservationService
 {
+    // Business-rule constants: how far ahead a slot may be booked, the minimum notice to update/cancel, and the QR scan tolerance either side of slot start.
     private static readonly TimeSpan SevenDays = TimeSpan.FromDays(7);
     private static readonly TimeSpan TwelveHours = TimeSpan.FromHours(12);
     private static readonly TimeSpan QrToleranceWindow = TimeSpan.FromHours(24);
@@ -33,6 +34,7 @@ public class ReservationService : IReservationService
     // Returns reservations optionally filtered by status, station and/or prosumer.
     public async Task<List<ReservationResponse>> GetAllAsync(string? status, string? stationId, string? prosumerNic)
     {
+        // Each supplied criterion narrows the result (AND); empty ones are skipped so no argument means "everything".
         var filters = new List<FilterDefinition<EnergyReservation>>();
 
         if (!string.IsNullOrEmpty(status))
@@ -71,6 +73,7 @@ public class ReservationService : IReservationService
     // Checks a reservation ID and NIC together so ownership failures have one indistinguishable result.
     public async Task<bool> IsOwnedByAsync(string reservationId, string prosumerNic)
     {
+        // A malformed id is treated as "not owned", the same result as an unknown id or someone else's reservation.
         if (!ObjectId.TryParse(reservationId, out _))
         {
             return false;
@@ -83,6 +86,7 @@ public class ReservationService : IReservationService
     // Ignores the client-supplied NIC and delegates the booking to the existing rule-enforcing method.
     public Task<ReservationResponse> CreateForProsumerAsync(CreateReservationRequest request, string prosumerNic)
     {
+        // Overwrite whatever NIC the client sent so a prosumer can never book on someone else's behalf; the NIC also becomes CreatedBy.
         request.ProsumerNic = prosumerNic;
         return CreateAsync(request, prosumerNic);
     }
@@ -90,6 +94,7 @@ public class ReservationService : IReservationService
     // Books a slot for a prosumer after validating the prosumer, station, slot and 7-day window.
     public async Task<ReservationResponse> CreateAsync(CreateReservationRequest request, string createdBy)
     {
+        // Pending and deactivated prosumers cannot book: only an active (Backoffice-approved) prosumer passes.
         var prosumer = await _db.Prosumers.Find(p => p.Nic == request.ProsumerNic).FirstOrDefaultAsync();
         if (prosumer is null || !prosumer.IsActive)
         {
@@ -108,6 +113,7 @@ public class ReservationService : IReservationService
             throw new InvalidOperationException("Slot not found");
         }
 
+        // The only failure mapped to 409 (ReservationConflictException); every other rule below is a 400.
         if (slot.IsBooked)
         {
             throw new ReservationConflictException("Slot is already booked");
@@ -118,6 +124,7 @@ public class ReservationService : IReservationService
             throw new InvalidOperationException("Slot does not belong to this station");
         }
 
+        // All times are compared in UTC so the rules do not depend on server or client time zones.
         var now = DateTime.UtcNow;
         if (slot.StartTime <= now)
         {
@@ -129,6 +136,7 @@ public class ReservationService : IReservationService
             throw new InvalidOperationException("Reservations must be within 7 days");
         }
 
+        // Only live (Pending/Approved) reservations count, so a prosumer may rebook a slot after cancelling.
         var alreadyReserved = await _db.Reservations.Find(r =>
             r.SlotId == request.SlotId &&
             r.ProsumerNic == request.ProsumerNic &&
@@ -140,6 +148,7 @@ public class ReservationService : IReservationService
             throw new InvalidOperationException("Prosumer already has a reservation for this slot");
         }
 
+        // Prosumer, station and slot details are copied in as a snapshot, so history stays readable if those records change later.
         var reservation = new EnergyReservation
         {
             ProsumerNic = prosumer.Nic,
@@ -155,6 +164,7 @@ public class ReservationService : IReservationService
             CreatedBy = createdBy,
         };
 
+        // The IsBooked check above and this lock are separate operations (check-then-set), not one atomic step.
         await _db.Reservations.InsertOneAsync(reservation);
         await SetSlotBookedAsync(slot.Id, true);
 
@@ -170,11 +180,13 @@ public class ReservationService : IReservationService
             return null;
         }
 
+        // Approved reservations already have a QR issued, so they cannot be moved; they must be cancelled and rebooked.
         if (reservation.Status != "Pending")
         {
             throw new InvalidOperationException("Only pending reservations can be updated");
         }
 
+        // The notice period is measured against the CURRENT slot; the new slot has to pass the booking checks below.
         var now = DateTime.UtcNow;
         if (!HasTwelveHoursNotice(reservation.SlotStartTime, now))
         {
@@ -207,9 +219,11 @@ public class ReservationService : IReservationService
             throw new InvalidOperationException("Reservations must be within 7 days");
         }
 
+        // Release the old slot and lock the new one before rewriting the reservation; these are separate writes, not a transaction.
         await SetSlotBookedAsync(reservation.SlotId, false);
         await SetSlotBookedAsync(newSlot.Id, true);
 
+        // Station is never changed, only the slot and the slot-derived times/capacity. QR fields are cleared defensively (a Pending reservation should not hold one).
         var update = Builders<EnergyReservation>.Update
             .Set(r => r.SlotId, newSlot.Id)
             .Set(r => r.SlotStartTime, newSlot.StartTime)
@@ -241,14 +255,17 @@ public class ReservationService : IReservationService
             throw new InvalidOperationException("Only pending or approved reservations can be cancelled");
         }
 
+        // allowOverride is decided by the controller (true only for Backoffice); the service just applies it.
         var now = DateTime.UtcNow;
         if (!allowOverride && !HasTwelveHoursNotice(reservation.SlotStartTime, now))
         {
             throw new InvalidOperationException("Cancellations require at least 12 hours' notice");
         }
 
+        // Free the slot so another prosumer can book it.
         await SetSlotBookedAsync(reservation.SlotId, false);
 
+        // Clearing the QR token invalidates any QR already shown to the prosumer, so a cancelled booking cannot be scanned.
         var update = Builders<EnergyReservation>.Update
             .Set(r => r.Status, "Cancelled")
             .Set(r => r.CancelledAt, now)
@@ -278,6 +295,7 @@ public class ReservationService : IReservationService
             throw new InvalidOperationException("Only pending reservations can be approved");
         }
 
+        // The QR token is issued only here, so no reservation can have a QR before it is Approved.
         var now = DateTime.UtcNow;
         var update = Builders<EnergyReservation>.Update
             .Set(r => r.Status, "Approved")
@@ -307,6 +325,8 @@ public class ReservationService : IReservationService
             throw new InvalidOperationException("Only approved reservations can be completed");
         }
 
+        // Administrative completion path (Backoffice only, see the controller). Unlike ScanAndCompleteAsync it reads the status first and then writes,
+        // so it does not guard against a concurrent completion. QrGeneratedAt is kept as a record of when the QR was issued; only the token is cleared.
         var now = DateTime.UtcNow;
         await SetSlotBookedAsync(reservation.SlotId, false);
 
@@ -327,6 +347,7 @@ public class ReservationService : IReservationService
     // and fall within a +/-24 hour tolerance window of the slot's start time.
     public async Task<(bool Valid, ReservationResponse? Reservation, string? Error)> VerifyQrAsync(VerifyQrRequest request)
     {
+        // Lookup is by token alone. Tokens are cleared on cancel/complete, so a used or cancelled QR is "not recognized" here.
         var reservation = await _db.Reservations.Find(r => r.QrToken == request.QrToken).FirstOrDefaultAsync();
         if (reservation is null)
         {
@@ -338,11 +359,13 @@ public class ReservationService : IReservationService
             return (false, null, "QR is no longer valid");
         }
 
+        // Stops a QR issued for one station being accepted at another.
         if (reservation.StationId != request.StationId)
         {
             return (false, null, "QR does not belong to this station");
         }
 
+        // Duration() makes the difference absolute, so scanning up to 24 hours before OR after slot start is accepted.
         var now = DateTime.UtcNow;
         if ((reservation.SlotStartTime - now).Duration() > QrToleranceWindow)
         {
@@ -357,6 +380,7 @@ public class ReservationService : IReservationService
         VerifyQrRequest request,
         string completedBy)
     {
+        // Read-only verification first, so all QR rules live in one place; the write below only has to win the race.
         var (valid, verifiedReservation, error) = await VerifyQrAsync(request);
         if (!valid || verifiedReservation is null)
         {
@@ -380,11 +404,13 @@ public class ReservationService : IReservationService
             filter,
             update,
             new FindOneAndUpdateOptions<EnergyReservation> { ReturnDocument = ReturnDocument.After });
+        // A null result means the filter no longer matched, i.e. another scan changed the reservation between verification and this write.
         if (completed is null)
         {
             return (false, null, "This reservation has already been completed");
         }
 
+        // The slot is freed only by the caller that won the swap, so it is released exactly once.
         await SetSlotBookedAsync(completed.SlotId, false);
         return (true, ToResponse(completed), null);
     }
@@ -404,6 +430,7 @@ public class ReservationService : IReservationService
     // Used by StationService to block deactivation while a station has an Approved reservation.
     public async Task<bool> HasActiveReservationsAsync(string stationId)
     {
+        // Only Approved counts here (Pending does not block deactivation), unlike SlotHasActiveReservationAsync which also counts Pending.
         return await _db.Reservations.Find(r => r.StationId == stationId && r.Status == "Approved").AnyAsync();
     }
 
@@ -428,6 +455,7 @@ public class ReservationService : IReservationService
             throw new InvalidOperationException("SortDir must be 'asc' or 'desc'");
         }
 
+        // Out-of-range paging is corrected here rather than rejected; the request model's [Range] attributes already reject bad values at the API edge.
         var pageSize = Math.Clamp(request.PageSize, 1, 100);
         var page = Math.Max(request.Page, 1);
 
@@ -438,6 +466,7 @@ public class ReservationService : IReservationService
             filters.Add(Builders<EnergyReservation>.Filter.Eq(r => r.ProsumerNic, request.ProsumerNic));
         }
 
+        // Regex.Escape treats the search text literally, so characters like "." or "(" cannot alter the query.
         if (!string.IsNullOrWhiteSpace(request.ProsumerName))
         {
             filters.Add(Builders<EnergyReservation>.Filter.Regex(
@@ -456,6 +485,7 @@ public class ReservationService : IReservationService
             filters.Add(Builders<EnergyReservation>.Filter.Eq(r => r.Status, request.Status));
         }
 
+        // The date range applies to the slot's start time (when the transfer is scheduled), not to when the booking was made.
         if (request.DateFrom.HasValue)
         {
             filters.Add(Builders<EnergyReservation>.Filter.Gte(r => r.SlotStartTime, request.DateFrom.Value));
@@ -478,6 +508,7 @@ public class ReservationService : IReservationService
 
         var filter = filters.Count > 0 ? Builders<EnergyReservation>.Filter.And(filters) : FilterDefinition<EnergyReservation>.Empty;
 
+        // An unknown or missing SortBy falls back to slot start time (the "date" sort) instead of failing.
         var ascending = sortDir == "asc";
         SortDefinition<EnergyReservation> sort = (request.SortBy?.ToLowerInvariant()) switch
         {
@@ -495,6 +526,7 @@ public class ReservationService : IReservationService
                 : Builders<EnergyReservation>.Sort.Descending(r => r.SlotStartTime),
         };
 
+        // Count and page are two separate queries, so the total can drift slightly if data changes between them.
         var totalCount = (int)await _db.Reservations.CountDocumentsAsync(filter);
         var totalPages = totalCount == 0 ? 0 : (int)Math.Ceiling(totalCount / (double)pageSize);
 
@@ -524,6 +556,7 @@ public class ReservationService : IReservationService
         int page,
         int pageSize)
     {
+        // Unlike SearchAsync, invalid paging is rejected with an error here instead of being clamped.
         if (page < 1)
         {
             throw new InvalidOperationException("Page must be 1 or greater");
@@ -539,6 +572,7 @@ public class ReservationService : IReservationService
             throw new InvalidOperationException("DateFrom must not be after DateTo");
         }
 
+        // Malformed and unknown station ids both report "Station not found"; the ObjectId check comes first so a bad id never reaches the query.
         if (!string.IsNullOrWhiteSpace(stationId) &&
             (!ObjectId.TryParse(stationId, out _) ||
              !await _db.Stations.Find(station => station.Id == stationId).AnyAsync()))
@@ -556,6 +590,7 @@ public class ReservationService : IReservationService
             filters.Add(Builders<EnergyReservation>.Filter.Eq(reservation => reservation.StationId, stationId));
         }
 
+        // Here the date range applies to CompletedAt (when the transfer happened), unlike SearchAsync which uses the slot start time.
         if (dateFrom.HasValue)
         {
             filters.Add(Builders<EnergyReservation>.Filter.Gte(reservation => reservation.CompletedAt, dateFrom.Value));
@@ -592,6 +627,7 @@ public class ReservationService : IReservationService
         string prosumerNic,
         ReservationSearchRequest request)
     {
+        // The NIC pins results to the caller regardless of what the client sent; the name filter is a management-side criterion and is dropped.
         request.ProsumerNic = prosumerNic;
         request.ProsumerName = null;
         return SearchAsync(request);
@@ -600,6 +636,7 @@ public class ReservationService : IReservationService
     // Computes confirmation text and modifiability from the actual slot time and final status.
     public ReservationActionResponse CreateActionResponse(ReservationResponse reservation, string action)
     {
+        // The confirmation text is built here so the mobile app only displays it and holds no wording or rules of its own.
         var message = action switch
         {
             "Created" => "Reservation created successfully.",
@@ -608,6 +645,7 @@ public class ReservationService : IReservationService
             _ => throw new InvalidOperationException("Unsupported reservation action."),
         };
 
+        // CanStillModify uses the exact hours; only the displayed HoursUntilSlot is rounded (to 1 decimal, halves away from zero).
         var now = DateTime.UtcNow;
         var exactHoursUntilSlot = HoursUntilSlot(reservation.SlotStartTime, now);
         var roundedHoursUntilSlot = Math.Round(exactHoursUntilSlot, 1, MidpointRounding.AwayFromZero);
@@ -625,12 +663,14 @@ public class ReservationService : IReservationService
     // Accepts future bookings through the exact seven-day boundary.
     internal static bool IsWithinBookingWindow(DateTime slotStart, DateTime now)
     {
+        // Both ends are enforced: strictly in the future, and no more than 7 days out (exactly 7 days is still allowed).
         return slotStart > now && slotStart - now <= SevenDays;
     }
 
     // Accepts modifications with at least twelve hours of notice.
     internal static bool HasTwelveHoursNotice(DateTime slotStart, DateTime now)
     {
+        // Inclusive boundary: exactly 12 hours of notice is enough. A slot already in the past gives a negative span, so it fails.
         return slotStart - now >= TwelveHours;
     }
 
@@ -643,6 +683,7 @@ public class ReservationService : IReservationService
     // Allows only pending reservations with at least twelve hours left to be modified.
     internal static bool CanStillModify(ReservationResponse reservation, DateTime now)
     {
+        // Mirrors UpdateAsync's rules so the app's "can still modify" flag matches what the API would accept. Approved bookings are not editable.
         return reservation.Status == "Pending" && HasTwelveHoursNotice(reservation.SlotStartTime, now);
     }
 
@@ -661,6 +702,7 @@ public class ReservationService : IReservationService
     // Maps an EnergyReservation document to its public response shape, omitting the QR token.
     private static ReservationResponse ToResponse(EnergyReservation reservation)
     {
+        // QrToken is intentionally not copied: it is only exposed through the dedicated QR endpoints, with their ownership and role checks.
         return new ReservationResponse
         {
             Id = reservation.Id,
