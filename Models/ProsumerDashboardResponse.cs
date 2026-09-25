@@ -10,8 +10,10 @@ namespace SmartMicrogrid.API.Models;
 public class ProsumerDashboardResponse
 {
     public int PendingCount { get; set; }
+    // Approved reservations that have not started yet; past approved ones are not counted here.
     public int ApprovedFutureCount { get; set; }
     public int CompletedCount { get; set; }
     public int CancelledCount { get; set; }
+    // The soonest upcoming approved booking, or null when the prosumer has none.
     public ReservationResponse? NextReservation { get; set; }
 }
