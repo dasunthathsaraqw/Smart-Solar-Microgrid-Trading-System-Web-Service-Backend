@@ -13,6 +13,7 @@ namespace SmartMicrogrid.API.Models;
 
 public class CreateReservationRequest
 {
+    // Whose booking this is; supplied by Backoffice/Operator callers (prosumers use CreateOwnReservationRequest, where it comes from the token).
     [Required]
     public string ProsumerNic { get; set; } = string.Empty;
 
