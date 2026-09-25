@@ -11,6 +11,7 @@ namespace SmartMicrogrid.API.Models;
 
 public class CancelReservationRequest
 {
+    // Free-text explanation stored as CancellationReason; may be omitted.
     [StringLength(200)]
     public string? Reason { get; set; }
 }
