@@ -18,9 +18,11 @@ public class ProsumerResponse
     public string Address { get; set; } = string.Empty;
     public double PanelCapacityKw { get; set; }
     public bool IsActive { get; set; }
+    // Raw flag: on an active prosumer it means a deactivation is awaiting Backoffice; on an inactive one it means "deactivated".
     public bool DeactivationRequested { get; set; }
     public DateTime CreatedAt { get; set; }
     public string CreatedBy { get; set; } = string.Empty;
     public DateTime? UpdatedAt { get; set; }
+    // Computed by ProsumerService.ToResponse, not stored: "active" | "pending" | "deactivated".
     public string Status { get; set; } = string.Empty;
 }
