@@ -26,6 +26,7 @@ public class ProsumerService : IProsumerService
     // Returns prosumers filtered by derived status ("active" | "pending" | "deactivated"), or all when status is null/unknown.
     public async Task<List<ProsumerResponse>> GetAllAsync(string? status)
     {
+        // Status is not stored, so each label is translated into the IsActive/DeactivationRequested combination that ToResponse derives it from.
         FilterDefinition<Prosumer> filter = status?.ToLowerInvariant() switch
         {
             "active" => Builders<Prosumer>.Filter.Eq(p => p.IsActive, true),
@@ -35,9 +36,11 @@ public class ProsumerService : IProsumerService
             "deactivated" => Builders<Prosumer>.Filter.And(
                 Builders<Prosumer>.Filter.Eq(p => p.IsActive, false),
                 Builders<Prosumer>.Filter.Eq(p => p.DeactivationRequested, true)),
+            // Null or unrecognised status falls back to "no filter" instead of failing.
             _ => FilterDefinition<Prosumer>.Empty,
         };
 
+        // Newest registrations first so pending approvals appear at the top of the Backoffice list.
         var prosumers = await _db.Prosumers.Find(filter).SortByDescending(p => p.CreatedAt).ToListAsync();
         return prosumers.Select(ToResponse).ToList();
     }
@@ -57,11 +60,13 @@ public class ProsumerService : IProsumerService
             throw new InvalidOperationException("NIC already registered");
         }
 
+        // Email is checked against Users (not Prosumers) because Users holds every login, including Backoffice and Operator accounts.
         if (await _db.Users.Find(u => u.Email == request.Email).AnyAsync())
         {
             throw new InvalidOperationException("Email already registered");
         }
 
+        // Hash once and reuse it so the Prosumers and Users documents always carry the identical hash.
         var passwordHash = _passwordHasher.Hash(request.Password);
         var createdAt = DateTime.UtcNow;
         var prosumer = new Prosumer
@@ -73,12 +78,14 @@ public class ProsumerService : IProsumerService
             Address = request.Address,
             PanelCapacityKw = request.PanelCapacityKw,
             PasswordHash = passwordHash,
+            // Inactive until Backoffice approves; DeactivationRequested stays false so the derived status is "pending".
             IsActive = false,
             DeactivationRequested = false,
             CreatedAt = createdAt,
             CreatedBy = "self-registration",
         };
 
+        // Login account linked to the profile by NIC; also inactive, so login is refused until approval.
         var user = new User
         {
             Nic = request.Nic,
@@ -99,6 +106,7 @@ public class ProsumerService : IProsumerService
         }
         catch
         {
+            // The two inserts are not in a transaction, so undo the profile insert to avoid a prosumer with no login account.
             await _db.Prosumers.DeleteOneAsync(p => p.Id == prosumer.Id);
             throw;
         }
@@ -114,6 +122,7 @@ public class ProsumerService : IProsumerService
             throw new InvalidOperationException("NIC already exists");
         }
 
+        // Only the Prosumers collection is checked here, unlike RegisterAsync which checks Users.
         if (await EmailExistsAsync(request.Email))
         {
             throw new InvalidOperationException("Email already exists");
@@ -131,9 +140,11 @@ public class ProsumerService : IProsumerService
             IsActive = false,
             DeactivationRequested = false,
             CreatedAt = DateTime.UtcNow,
+            // Records which Backoffice user created the profile (email claim from the JWT).
             CreatedBy = createdBy,
         };
 
+        // Note: unlike RegisterAsync, this inserts only the profile and creates no Users login document.
         await _db.Prosumers.InsertOneAsync(prosumer);
         return ToResponse(prosumer);
     }
@@ -147,11 +158,14 @@ public class ProsumerService : IProsumerService
             return null;
         }
 
+        // Only run the uniqueness check when the email actually changes, otherwise the prosumer would collide with their own record.
         if (!string.IsNullOrWhiteSpace(request.Email) && request.Email != prosumer.Email && await EmailExistsAsync(request.Email))
         {
             throw new InvalidOperationException("Email already exists");
         }
 
+        // Partial update: only fields with a non-blank value are added, so omitted or blank fields keep their current value.
+        // Note: this updates the Prosumers document only; the linked Users document is not touched (UpdateOwnProfileAsync does sync it).
         var updates = new List<UpdateDefinition<Prosumer>>();
 
         if (!string.IsNullOrWhiteSpace(request.Name))
@@ -179,12 +193,14 @@ public class ProsumerService : IProsumerService
             updates.Add(Builders<Prosumer>.Update.Set(p => p.PanelCapacityKw, request.PanelCapacityKw.Value));
         }
 
+        // Skip the write entirely for an empty request so UpdatedAt only changes when something was edited.
         if (updates.Count > 0)
         {
             updates.Add(Builders<Prosumer>.Update.Set(p => p.UpdatedAt, DateTime.UtcNow));
             await _db.Prosumers.UpdateOneAsync(p => p.Nic == nic, Builders<Prosumer>.Update.Combine(updates));
         }
 
+        // Re-read so the response reflects the stored document; the null-forgiving operator is safe because the prosumer was found above.
         var updated = await _db.Prosumers.Find(p => p.Nic == nic).FirstOrDefaultAsync();
         return ToResponse(updated!);
     }
@@ -204,12 +220,14 @@ public class ProsumerService : IProsumerService
             throw new InvalidOperationException("Credential account not found");
         }
 
+        // Email is the login identifier, so uniqueness is checked against Users while excluding the caller's own account.
         if (request.Email is not null && request.Email != prosumer.Email &&
             await _db.Users.Find(u => u.Email == request.Email && u.Id != user.Id).AnyAsync())
         {
             throw new InvalidOperationException("Email already registered");
         }
 
+        // Partial update: null means "not supplied". Name and Email are mirrored to the Users document; the other fields exist only on the profile.
         var prosumerUpdates = new List<UpdateDefinition<Prosumer>>();
         var userUpdates = new List<UpdateDefinition<User>>();
 
@@ -242,6 +260,7 @@ public class ProsumerService : IProsumerService
 
         if (prosumerUpdates.Count > 0)
         {
+            // Both documents get the same timestamp so they stay consistent.
             var updatedAt = DateTime.UtcNow;
             prosumerUpdates.Add(Builders<Prosumer>.Update.Set(p => p.UpdatedAt, updatedAt));
             await _db.Prosumers.UpdateOneAsync(p => p.Nic == nic, Builders<Prosumer>.Update.Combine(prosumerUpdates));
@@ -262,6 +281,8 @@ public class ProsumerService : IProsumerService
     {
         var user = await _db.Users.Find(u => u.Nic == nic).FirstOrDefaultAsync();
         var prosumer = await _db.Prosumers.Find(p => p.Nic == nic).FirstOrDefaultAsync();
+        // Missing account and wrong current password both return false, so the caller cannot tell which one failed.
+        // The current password is verified against Users, the collection login actually reads.
         if (user is null || prosumer is null || !_passwordHasher.Verify(request.CurrentPassword, user.PasswordHash))
         {
             return false;
@@ -286,6 +307,7 @@ public class ProsumerService : IProsumerService
         }
         catch
         {
+            // Not transactional: if the Users write fails, restore the old hash on the profile so the two copies never diverge.
             await _db.Prosumers.UpdateOneAsync(
                 p => p.Nic == nic,
                 Builders<Prosumer>.Update
@@ -306,11 +328,13 @@ public class ProsumerService : IProsumerService
             return (false, "Prosumer not found.");
         }
 
+        // Only active accounts can ask to be deactivated; pending or already-deactivated ones have nothing to request.
         if (!prosumer.IsActive)
         {
             return (false, "The prosumer account is already inactive.");
         }
 
+        // Pending and Approved reservations still hold a slot, so they must be cancelled before the account can leave the system.
         var hasOpenReservation = await _db.Reservations.Find(r =>
             r.ProsumerNic == nic && (r.Status == "Pending" || r.Status == "Approved")).AnyAsync();
         if (hasOpenReservation)
@@ -318,6 +342,7 @@ public class ProsumerService : IProsumerService
             return (false, "Cancel all pending or approved reservations before requesting deactivation.");
         }
 
+        // The account stays active; the flag only queues it for Backoffice review (see GetPendingDeactivationsAsync).
         await _db.Prosumers.UpdateOneAsync(
             p => p.Nic == nic,
             Builders<Prosumer>.Update
@@ -330,6 +355,7 @@ public class ProsumerService : IProsumerService
     // Returns active prosumers whose self-service deactivation requests await Backoffice action.
     public async Task<List<ProsumerResponse>> GetPendingDeactivationsAsync()
     {
+        // IsActive && DeactivationRequested is the "requested, not yet actioned" state; the flag is set when the request is made, so UpdatedAt orders by most recent request.
         var prosumers = await _db.Prosumers
             .Find(p => p.IsActive && p.DeactivationRequested)
             .SortByDescending(p => p.UpdatedAt)
@@ -349,6 +375,7 @@ public class ProsumerService : IProsumerService
                 .Set(p => p.UpdatedAt, DateTime.UtcNow)
         );
 
+        // Also disable the login account so the prosumer can no longer sign in. MatchedCount (not ModifiedCount) is used so re-deactivating an already-inactive prosumer still counts as found.
         if (result.MatchedCount > 0)
         {
             await _db.Users.UpdateOneAsync(
@@ -372,6 +399,7 @@ public class ProsumerService : IProsumerService
                 .Set(p => p.UpdatedAt, DateTime.UtcNow)
         );
 
+        // Enabling the login account is what lets a newly approved prosumer sign in.
         if (result.MatchedCount > 0)
         {
             await _db.Users.UpdateOneAsync(
@@ -399,6 +427,8 @@ public class ProsumerService : IProsumerService
     // Maps a Prosumer document to its public response shape, omitting the password hash and deriving Status.
     private static ProsumerResponse ToResponse(Prosumer prosumer)
     {
+        // Derivation table: IsActive => "active". Inactive + DeactivationRequested => "deactivated". Inactive otherwise => "pending".
+        // Note: an active prosumer with a queued deactivation request still reports "active" until Backoffice acts.
         var status = prosumer.IsActive ? "active" : prosumer.DeactivationRequested ? "deactivated" : "pending";
 
         return new ProsumerResponse
