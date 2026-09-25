@@ -11,6 +11,7 @@ namespace SmartMicrogrid.API.Models;
 
 public class CreateStationRequest
 {
+    // Must be unique ignoring case; the service returns a conflict if the name is taken.
     [Required]
     [StringLength(100, MinimumLength = 3)]
     public string StationName { get; set; } = string.Empty;
@@ -27,6 +28,7 @@ public class CreateStationRequest
     [Range(0, int.MaxValue, ErrorMessage = "Available slots must be 0 or more.")]
     public int AvailableSlots { get; set; }
 
+    // Operating hours text such as "06:00-20:00 Mon-Sun"; slots are later validated against it by ScheduleValidator.
     [Required]
     public string Schedule { get; set; } = string.Empty;
 }
