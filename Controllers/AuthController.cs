@@ -42,6 +42,7 @@ public class AuthController : ControllerBase
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
     public async Task<IActionResult> Login([FromBody] LoginRequest request)
     {
+        // The service returns (response, accountInactive) so the three outcomes stay distinct: success, bad credentials (401) and inactive account (403).
         var (response, accountInactive) = await _authService.LoginAsync(request);
         if (accountInactive)
         {
@@ -51,6 +52,7 @@ public class AuthController : ControllerBase
             });
         }
 
+        // One generic message for both an unknown email and a wrong password, so the API does not confirm which emails are registered.
         if (response is null)
         {
             return Unauthorized(new { message = "Invalid email or password." });
@@ -73,18 +75,21 @@ public class AuthController : ControllerBase
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> Me()
     {
+        // Login errors above use { message }, whereas this endpoint uses { error }. The app's ApiError class normalizes both shapes.
         var id = User.FindFirstValue(ClaimTypes.NameIdentifier);
         if (string.IsNullOrWhiteSpace(id))
         {
             return Unauthorized(new { error = "The access token does not contain a user ID claim." });
         }
 
+        // A deleted account gets 401 (not 404) so the app treats it as a signed-out session. This endpoint does not check IsActive.
         var user = await _authService.GetByIdAsync(id);
         if (user is null)
         {
             return Unauthorized(new { error = "The authenticated user account no longer exists." });
         }
 
+        // An anonymous object is returned on purpose: it exposes only these fields, so PasswordHash and audit fields on User can never leak.
         return Ok(new
         {
             user.Id,
