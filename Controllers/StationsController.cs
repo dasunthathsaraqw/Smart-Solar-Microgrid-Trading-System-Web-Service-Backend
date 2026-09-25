@@ -58,6 +58,7 @@ public class StationsController : ControllerBase
     }
 
     // Handles GET /api/stations/nearby and returns distance-ordered active stations with slot counts.
+    // Defaults (10 km radius, 20 results) apply when the app omits them; range checks live in the service and surface as 400.
     [HttpGet("nearby")]
     [Authorize(Roles = "Backoffice,GridOperator,Prosumer")]
     public async Task<IActionResult> GetNearby(
@@ -91,6 +92,7 @@ public class StationsController : ControllerBase
         }
         catch (InvalidOperationException ex)
         {
+            // The only failure the service raises here is a duplicate station name, hence 409.
             return Conflict(new { message = ex.Message });
         }
     }
@@ -124,6 +126,8 @@ public class StationsController : ControllerBase
         var (success, error) = await _stationService.DeactivateAsync(id);
         if (!success)
         {
+            // The service reports failures as text, so "not found" is recognised by comparing the message: keep it in sync with StationService.
+            // Any other failure (an Approved reservation blocking deactivation) is a 400, and uses the { error } shape rather than { message }.
             return error == "Station not found" ? NotFound() : BadRequest(new { error });
         }
 
