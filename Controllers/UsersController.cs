@@ -61,6 +61,7 @@ public class UsersController : ControllerBase
         }
         catch (InvalidOperationException ex)
         {
+            // Covers a duplicate email and an invalid or unknown station id; all are reported as 409 here.
             return Conflict(new { message = ex.Message });
         }
     }
@@ -91,10 +92,12 @@ public class UsersController : ControllerBase
     [HttpPut("{id}/deactivate")]
     public async Task<IActionResult> Deactivate(string id)
     {
+        // The caller's own id is passed down so the service can refuse self-deactivation; the empty-string fallback never matches a real id.
         var requestingUserId = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? string.Empty;
         var (success, error) = await _userService.DeactivateAsync(id, requestingUserId);
         if (!success)
         {
+            // "Not found" is detected by comparing the message text, so it must stay in sync with UserService. The safety-rule failures return 400 with { error }.
             return error == "User not found" ? NotFound() : BadRequest(new { error });
         }
 
