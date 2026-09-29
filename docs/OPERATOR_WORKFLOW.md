@@ -195,7 +195,7 @@ The response uses these `PagedResult` fields:
 13. The consumed booking slot remains booked and cannot be offered for another reservation.
 14. The completed transfer appears in operator history and dashboard totals.
 
-GridOperators must **not** call `PUT /api/reservations/{id}/complete`. That endpoint is retained as a Backoffice administrative/recovery path and always returns `403` to GridOperators. Backoffice completion requires an Approved reservation and atomically claims the one-time status change, but does not perform the operator QR, station, or time-window checks. Both completion paths keep the consumed slot booked. Cancellation and moving a Pending booking still release the old slot.
+GridOperators must **not** call `PUT /api/reservations/{id}/complete`. That endpoint is retained as a Backoffice administrative/recovery path and always returns `403` to GridOperators. It checks that the Backoffice account is still active and has that role, requires an Approved reservation, and atomically claims the one-time status change. It does not perform the operator QR, station, or time-window checks. Both completion paths keep the consumed slot booked. Cancellation and moving a Pending booking still release the old slot.
 
 ### Verify request
 

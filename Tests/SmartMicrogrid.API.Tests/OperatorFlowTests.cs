@@ -598,6 +598,38 @@ public sealed class OperatorFlowTests
         Assert.Null(unchanged.CompletedAt);
     }
 
+    [Fact]
+    public async Task AdministrativeCompletion_DeactivatedBackofficeWithExistingToken_IsForbidden()
+    {
+        using var admin = await _helpers.LoginAsync("admin@smartsolar.com", "Admin@123");
+        var email = $"backoffice-{Guid.NewGuid():N}@example.com";
+        const string password = "Backoffice@Test123";
+        var created = await admin.PostAsJsonAsync("/api/users", new
+        {
+            name = "Additional Backoffice", email, password, role = "Backoffice"
+        });
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var backoffice = await created.Content.ReadFromJsonAsync<UserResponse>();
+        using var oldTokenClient = await _helpers.LoginAsync(email, password);
+
+        var station = await _helpers.CreateStationAsync(admin);
+        var prosumer = await _helpers.RegisterAndApproveProsumerAsync(admin);
+        using var prosumerClient = prosumer.Client;
+        var slot = await _helpers.CreateSlotAsync(admin, station.Id, 2);
+        var booking = await _helpers.BookAsync(prosumerClient, station.Id, slot.Id);
+        await _helpers.ApproveAsync(admin, booking.Reservation.Id);
+
+        Assert.Equal(HttpStatusCode.NoContent,
+            (await admin.PutAsync($"/api/users/{backoffice!.Id}/deactivate", null)).StatusCode);
+        var rejected = await oldTokenClient.PutAsync(
+            $"/api/reservations/{booking.Reservation.Id}/complete", null);
+        Assert.Equal(HttpStatusCode.Forbidden, rejected.StatusCode);
+        Assert.Equal("Approved", (await admin.GetFromJsonAsync<ReservationResponse>(
+            $"/api/reservations/{booking.Reservation.Id}"))!.Status);
+        Assert.Equal(HttpStatusCode.OK,
+            (await admin.PutAsync($"/api/reservations/{booking.Reservation.Id}/complete", null)).StatusCode);
+    }
+
     // Rule: only GridOperators can scan and complete, not Prosumers, Backoffice users or anonymous callers.
     [Fact]
     public async Task ScanComplete_ProsumerBackofficeOrAnonymous_IsRejected()

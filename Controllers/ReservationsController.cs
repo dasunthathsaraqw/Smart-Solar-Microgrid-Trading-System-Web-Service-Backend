@@ -502,6 +502,26 @@ public class ReservationsController : ControllerBase
             });
         }
 
+        var backofficeId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        if (string.IsNullOrWhiteSpace(backofficeId))
+        {
+            return Unauthorized(new { error = "The access token does not contain a user ID claim." });
+        }
+
+        var backoffice = await _userService.GetByIdAsync(backofficeId);
+        if (backoffice is null)
+        {
+            return Unauthorized(new { error = "The authenticated Backoffice account no longer exists." });
+        }
+
+        if (!backoffice.IsActive || backoffice.Role != "Backoffice")
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new
+            {
+                error = "The Backoffice account is inactive or no longer has the Backoffice role."
+            });
+        }
+
         var completedBy = User.FindFirstValue(ClaimTypes.Email) ?? User.Identity?.Name ?? "unknown";
 
         try
