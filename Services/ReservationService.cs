@@ -219,9 +219,14 @@ public class ReservationService : IReservationService
             throw new InvalidOperationException("Reservations must be within 7 days");
         }
 
-        // Release the old slot and lock the new one before rewriting the reservation; these are separate writes, not a transaction.
-        await SetSlotBookedAsync(reservation.SlotId, false);
-        await SetSlotBookedAsync(newSlot.Id, true);
+        // Lock the destination first. The old slot remains occupied until the Pending move wins.
+        var slotLock = await _db.Slots.UpdateOneAsync(
+            slot => slot.Id == newSlot.Id && !slot.IsBooked,
+            Builders<EnergyBookingSlot>.Update.Set(slot => slot.IsBooked, true));
+        if (slotLock.MatchedCount == 0)
+        {
+            throw new ReservationConflictException("Slot is already booked");
+        }
 
         // Station is never changed, only the slot and the slot-derived times/capacity. QR fields are cleared defensively (a Pending reservation should not hold one).
         var update = Builders<EnergyReservation>.Update
@@ -234,10 +239,18 @@ public class ReservationService : IReservationService
             .Set(r => r.QrGeneratedAt, (DateTime?)null)
             .Set(r => r.UpdatedAt, now);
 
-        await _db.Reservations.UpdateOneAsync(r => r.Id == id, update);
+        var updated = await _db.Reservations.FindOneAndUpdateAsync(
+            r => r.Id == id && r.Status == "Pending" && r.SlotId == reservation.SlotId,
+            update,
+            new FindOneAndUpdateOptions<EnergyReservation> { ReturnDocument = ReturnDocument.After });
+        if (updated is null)
+        {
+            await SetSlotBookedAsync(newSlot.Id, false);
+            throw new InvalidOperationException("Only pending reservations can be updated");
+        }
 
-        var updated = await _db.Reservations.Find(r => r.Id == id).FirstOrDefaultAsync();
-        return ToResponse(updated!);
+        await SetSlotBookedAsync(reservation.SlotId, false);
+        return ToResponse(updated);
     }
 
     // Cancels a Pending or Approved reservation, subject to the 12-hour notice rule.

@@ -475,6 +475,38 @@ public sealed class OperatorFlowTests
     }
 
     [Fact]
+    public async Task PendingMove_TwoConcurrentDestinations_CannotOverwriteEachOther()
+    {
+        using var admin = await _helpers.LoginAsync("admin@smartsolar.com", "Admin@123");
+        var station = await _helpers.CreateStationAsync(admin);
+        var prosumer = await _helpers.RegisterAndApproveProsumerAsync(admin);
+        using var prosumerClient = prosumer.Client;
+        var original = await _helpers.CreateSlotAsync(admin, station.Id, 30);
+        var firstDestination = await _helpers.CreateSlotAsync(admin, station.Id, 32);
+        var secondDestination = await _helpers.CreateSlotAsync(admin, station.Id, 34);
+        var booking = await _helpers.BookAsync(prosumerClient, station.Id, original.Id);
+
+        var first = prosumerClient.PutAsJsonAsync(
+            $"/api/reservations/my/{booking.Reservation.Id}", new { newSlotId = firstDestination.Id });
+        var second = prosumerClient.PutAsJsonAsync(
+            $"/api/reservations/my/{booking.Reservation.Id}", new { newSlotId = secondDestination.Id });
+        var responses = await Task.WhenAll(first, second);
+        Assert.Contains(responses, response => response.StatusCode == HttpStatusCode.OK);
+        Assert.All(responses, response => Assert.Contains(response.StatusCode,
+            new[] { HttpStatusCode.OK, HttpStatusCode.BadRequest }));
+
+        var final = await admin.GetFromJsonAsync<ReservationResponse>(
+            $"/api/reservations/{booking.Reservation.Id}");
+        var firstSlot = await admin.GetFromJsonAsync<SlotResponse>($"/api/slots/{firstDestination.Id}");
+        var secondSlot = await admin.GetFromJsonAsync<SlotResponse>($"/api/slots/{secondDestination.Id}");
+        Assert.Equal("Pending", final!.Status);
+        Assert.Contains(final.SlotId, new[] { firstDestination.Id, secondDestination.Id });
+        Assert.False((await admin.GetFromJsonAsync<SlotResponse>($"/api/slots/{original.Id}"))!.IsBooked);
+        Assert.Equal(final.SlotId == firstDestination.Id, firstSlot!.IsBooked);
+        Assert.Equal(final.SlotId == secondDestination.Id, secondSlot!.IsBooked);
+    }
+
+    [Fact]
     public async Task AdministrativeAndQrCompletionRace_OnlyOneCompletionSucceeds()
     {
         using var admin = await _helpers.LoginAsync("admin@smartsolar.com", "Admin@123");
