@@ -137,7 +137,7 @@ public sealed class OperatorEndToEndTests
         Assert.Null(storedAfterScan.QrToken);
         Assert.Equal(completed.CompletedBy, storedAfterScan.CompletedBy);
         Assert.NotNull(storedAfterScan.CompletedAt);
-        Assert.False((await admin.GetFromJsonAsync<SlotResponse>($"/api/slots/{slot.Id}"))!.IsBooked);
+        Assert.True((await admin.GetFromJsonAsync<SlotResponse>($"/api/slots/{slot.Id}"))!.IsBooked);
 
         var history = await operatorClient.GetFromJsonAsync<PagedResult<ReservationResponse>>(
             "/api/reservations/operator/history");
@@ -167,7 +167,7 @@ public sealed class OperatorEndToEndTests
         Assert.Equal("Completed", afterReplay.Status);
         Assert.Equal(completed.CompletedAt, afterReplay.CompletedAt);
         Assert.Equal(completed.CompletedBy, afterReplay.CompletedBy);
-        Assert.False((await admin.GetFromJsonAsync<SlotResponse>($"/api/slots/{slot.Id}"))!.IsBooked);
+        Assert.True((await admin.GetFromJsonAsync<SlotResponse>($"/api/slots/{slot.Id}"))!.IsBooked);
     }
 
     // Proves an operator cannot discover or mutate reservation, dashboard, QR, or history data at another station.
@@ -441,6 +441,14 @@ public sealed class OperatorEndToEndTests
         Assert.NotNull(completed);
         Assert.Equal("Completed", completed.Status);
         Assert.Equal("admin@smartsolar.com", completed.CompletedBy);
+        Assert.NotNull(completed.CompletedAt);
+        Assert.True((await admin.GetFromJsonAsync<SlotResponse>($"/api/slots/{approved.Slot.Id}"))!.IsBooked);
+        var repeatedCompletion = await admin.PutAsync(
+            $"/api/reservations/{approved.Reservation.Id}/complete", null);
+        Assert.Equal(HttpStatusCode.BadRequest, repeatedCompletion.StatusCode);
+        var reusedQr = await prosumerClient.GetAsync(
+            $"/api/reservations/my/{approved.Reservation.Id}/qr");
+        Assert.Equal(HttpStatusCode.NotFound, reusedQr.StatusCode);
         Assert.Equal(
             "Completed",
             (await prosumerClient.GetFromJsonAsync<ReservationResponse>(

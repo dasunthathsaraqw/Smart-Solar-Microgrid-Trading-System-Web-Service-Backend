@@ -219,9 +219,14 @@ public class ReservationService : IReservationService
             throw new InvalidOperationException("Reservations must be within 7 days");
         }
 
-        // Release the old slot and lock the new one before rewriting the reservation; these are separate writes, not a transaction.
-        await SetSlotBookedAsync(reservation.SlotId, false);
-        await SetSlotBookedAsync(newSlot.Id, true);
+        // Lock the destination first. The old slot remains occupied until the Pending move wins.
+        var slotLock = await _db.Slots.UpdateOneAsync(
+            slot => slot.Id == newSlot.Id && !slot.IsBooked,
+            Builders<EnergyBookingSlot>.Update.Set(slot => slot.IsBooked, true));
+        if (slotLock.MatchedCount == 0)
+        {
+            throw new ReservationConflictException("Slot is already booked");
+        }
 
         // Station is never changed, only the slot and the slot-derived times/capacity. QR fields are cleared defensively (a Pending reservation should not hold one).
         var update = Builders<EnergyReservation>.Update
@@ -234,10 +239,18 @@ public class ReservationService : IReservationService
             .Set(r => r.QrGeneratedAt, (DateTime?)null)
             .Set(r => r.UpdatedAt, now);
 
-        await _db.Reservations.UpdateOneAsync(r => r.Id == id, update);
+        var updated = await _db.Reservations.FindOneAndUpdateAsync(
+            r => r.Id == id && r.Status == "Pending" && r.SlotId == reservation.SlotId,
+            update,
+            new FindOneAndUpdateOptions<EnergyReservation> { ReturnDocument = ReturnDocument.After });
+        if (updated is null)
+        {
+            await SetSlotBookedAsync(newSlot.Id, false);
+            throw new InvalidOperationException("Only pending reservations can be updated");
+        }
 
-        var updated = await _db.Reservations.Find(r => r.Id == id).FirstOrDefaultAsync();
-        return ToResponse(updated!);
+        await SetSlotBookedAsync(reservation.SlotId, false);
+        return ToResponse(updated);
     }
 
     // Cancels a Pending or Approved reservation, subject to the 12-hour notice rule.
@@ -262,9 +275,6 @@ public class ReservationService : IReservationService
             throw new InvalidOperationException("Cancellations require at least 12 hours' notice");
         }
 
-        // Free the slot so another prosumer can book it.
-        await SetSlotBookedAsync(reservation.SlotId, false);
-
         // Clearing the QR token invalidates any QR already shown to the prosumer, so a cancelled booking cannot be scanned.
         var update = Builders<EnergyReservation>.Update
             .Set(r => r.Status, "Cancelled")
@@ -275,10 +285,18 @@ public class ReservationService : IReservationService
             .Set(r => r.QrGeneratedAt, (DateTime?)null)
             .Set(r => r.UpdatedAt, now);
 
-        await _db.Reservations.UpdateOneAsync(r => r.Id == id, update);
+        // Claim the prior state before releasing the slot, so a concurrent completion cannot be overwritten.
+        var cancelled = await _db.Reservations.FindOneAndUpdateAsync(
+            r => r.Id == id && r.Status == reservation.Status,
+            update,
+            new FindOneAndUpdateOptions<EnergyReservation> { ReturnDocument = ReturnDocument.After });
+        if (cancelled is null)
+        {
+            throw new InvalidOperationException("Only pending or approved reservations can be cancelled");
+        }
 
-        var updated = await _db.Reservations.Find(r => r.Id == id).FirstOrDefaultAsync();
-        return ToResponse(updated!);
+        await SetSlotBookedAsync(cancelled.SlotId, false);
+        return ToResponse(cancelled);
     }
 
     // Approves a Pending reservation and generates its QR token.
@@ -305,13 +323,19 @@ public class ReservationService : IReservationService
             .Set(r => r.ApprovedBy, approvedBy)
             .Set(r => r.UpdatedAt, now);
 
-        await _db.Reservations.UpdateOneAsync(r => r.Id == id, update);
+        var approved = await _db.Reservations.FindOneAndUpdateAsync(
+            r => r.Id == id && r.Status == "Pending",
+            update,
+            new FindOneAndUpdateOptions<EnergyReservation> { ReturnDocument = ReturnDocument.After });
+        if (approved is null)
+        {
+            throw new InvalidOperationException("Only pending reservations can be approved");
+        }
 
-        var updated = await _db.Reservations.Find(r => r.Id == id).FirstOrDefaultAsync();
-        return ToResponse(updated!);
+        return ToResponse(approved);
     }
 
-    // Completes an Approved reservation (called after QR verification at the station) and frees its slot for reuse.
+    // Administrative completion. The consumed slot stays booked so it cannot be reserved again.
     public async Task<ReservationResponse?> CompleteAsync(string id, string completedBy)
     {
         var reservation = await _db.Reservations.Find(r => r.Id == id).FirstOrDefaultAsync();
@@ -325,11 +349,14 @@ public class ReservationService : IReservationService
             throw new InvalidOperationException("Only approved reservations can be completed");
         }
 
-        // Administrative completion path (Backoffice only, see the controller). Unlike ScanAndCompleteAsync it reads the status first and then writes,
-        // so it does not guard against a concurrent completion. QrGeneratedAt is kept as a record of when the QR was issued; only the token is cleared.
-        var now = DateTime.UtcNow;
-        await SetSlotBookedAsync(reservation.SlotId, false);
+        if (!await IsReservedSlotBookedAsync(reservation))
+        {
+            throw new InvalidOperationException("Reservation slot is missing or not booked");
+        }
 
+        // The status guard also protects this Backoffice path from a concurrent QR scan or repeat completion.
+        // QrGeneratedAt remains as an audit timestamp; only the usable token is cleared.
+        var now = DateTime.UtcNow;
         var update = Builders<EnergyReservation>.Update
             .Set(r => r.Status, "Completed")
             .Set(r => r.CompletedAt, now)
@@ -337,10 +364,16 @@ public class ReservationService : IReservationService
             .Set(r => r.QrToken, (string?)null)
             .Set(r => r.UpdatedAt, now);
 
-        await _db.Reservations.UpdateOneAsync(r => r.Id == id, update);
+        var completed = await _db.Reservations.FindOneAndUpdateAsync(
+            r => r.Id == id && r.Status == "Approved",
+            update,
+            new FindOneAndUpdateOptions<EnergyReservation> { ReturnDocument = ReturnDocument.After });
+        if (completed is null)
+        {
+            throw new InvalidOperationException("Only approved reservations can be completed");
+        }
 
-        var updated = await _db.Reservations.Find(r => r.Id == id).FirstOrDefaultAsync();
-        return ToResponse(updated!);
+        return ToResponse(completed);
     }
 
     // Validates a QR token presented at a station: must exist, be Approved, match the station,
@@ -372,10 +405,15 @@ public class ReservationService : IReservationService
             return (false, null, "QR is outside the valid time window");
         }
 
+        if (!await IsReservedSlotBookedAsync(reservation))
+        {
+            return (false, null, "Reservation slot is missing or not booked");
+        }
+
         return (true, ToResponse(reservation), null);
     }
 
-    // Verifies the QR and atomically claims the Approved-to-Completed transition before freeing its slot.
+    // Verifies the QR and atomically claims the Approved-to-Completed transition.
     public async Task<(bool Success, ReservationResponse? Reservation, string? Error)> ScanAndCompleteAsync(
         VerifyQrRequest request,
         string completedBy)
@@ -410,8 +448,7 @@ public class ReservationService : IReservationService
             return (false, null, "This reservation has already been completed");
         }
 
-        // The slot is freed only by the caller that won the swap, so it is released exactly once.
-        await SetSlotBookedAsync(completed.SlotId, false);
+        // Completion changes only this reservation document. The consumed slot remains booked.
         return (true, ToResponse(completed), null);
     }
 
@@ -691,6 +728,14 @@ public class ReservationService : IReservationService
     private async Task SetSlotBookedAsync(string slotId, bool isBooked)
     {
         await _db.Slots.UpdateOneAsync(s => s.Id == slotId, Builders<EnergyBookingSlot>.Update.Set(s => s.IsBooked, isBooked));
+    }
+
+    private async Task<bool> IsReservedSlotBookedAsync(EnergyReservation reservation)
+    {
+        return await _db.Slots.Find(slot =>
+            slot.Id == reservation.SlotId &&
+            slot.StationId == reservation.StationId &&
+            slot.IsBooked).AnyAsync();
     }
 
     // Generates a 64-character hex QR token from two concatenated GUIDs.

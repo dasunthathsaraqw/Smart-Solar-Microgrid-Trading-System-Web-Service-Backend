@@ -266,6 +266,11 @@ public class UserService : IUserService
             return (false, null, "The authenticated operator account no longer exists.");
         }
 
+        if (!user.IsActive || user.Role != "GridOperator")
+        {
+            return (true, null, "The Grid Operator account is inactive or no longer has the GridOperator role.");
+        }
+
         if (string.IsNullOrWhiteSpace(user.StationId))
         {
             return (true, null, "Grid Operator is not assigned to a station.");

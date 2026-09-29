@@ -75,6 +75,7 @@ For station-scoped GridOperator endpoints:
 - Supplying the matching `stationId` is accepted.
 - Supplying another station returns `403`.
 - Having no assignment returns `403`.
+- An account that is now inactive or no longer has the GridOperator role returns `403`, even with an unexpired older token.
 - Backoffice behavior is not restricted by GridOperator station assignment.
 
 ### Slot management scope
@@ -184,17 +185,17 @@ The response uses these `PagedResult` fields:
 3. The operator views assigned-station workload through `GET /api/reports/operator-dashboard` and reservation endpoints.
 4. The Prosumer presents the QR for an Approved reservation.
 5. The client sends `qrToken` and `stationId` to `POST /api/reservations/verify-qr`.
-6. The server checks the GridOperator role, persisted station assignment, token, Approved status, reservation station, and the +/-24-hour slot-start window.
+6. The server checks the GridOperator role and current active account, persisted station assignment, token, Approved status, reservation station, booked slot, and the +/-24-hour slot-start window.
 7. The client displays the returned verified `ReservationResponse`.
 8. The operator confirms that the physical energy transfer should be finalized.
 9. The client sends the same `qrToken` and `stationId` to `POST /api/reservations/scan-complete`.
 10. The server atomically changes the reservation from Approved to Completed.
 11. `completedAt` and `completedBy` are saved.
 12. The QR token is cleared and becomes unusable.
-13. The booking slot is released.
+13. The consumed booking slot remains booked and cannot be offered for another reservation.
 14. The completed transfer appears in operator history and dashboard totals.
 
-GridOperators must **not** call `PUT /api/reservations/{id}/complete`. That endpoint is retained as a Backoffice administrative/recovery path and always returns `403` to GridOperators.
+GridOperators must **not** call `PUT /api/reservations/{id}/complete`. That endpoint is retained as a Backoffice administrative/recovery path and always returns `403` to GridOperators. It checks that the Backoffice account is still active and has that role, requires an Approved reservation, and atomically claims the one-time status change. It does not perform the operator QR, station, or time-window checks. Both completion paths keep the consumed slot booked. Cancellation and moving a Pending booking still release the old slot.
 
 ### Verify request
 

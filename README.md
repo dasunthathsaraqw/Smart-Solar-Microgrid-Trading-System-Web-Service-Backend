@@ -32,7 +32,7 @@ These are public demo credentials: never enable sample seeding against a product
 
 GridOperators authenticate through `/api/auth/login` and can refresh their persisted station context through `/api/auth/me`. Dashboard, reservation management, and completed transaction history are automatically restricted to that assignment; unassigned operators and foreign-station requests receive `403`.
 
-Physical energy transfers use the QR workflow: validate the Prosumer's Approved reservation with `/api/reservations/verify-qr`, then confirm the transfer with `/api/reservations/scan-complete`. Successful scanning atomically records completion, invalidates the QR, releases the slot, and exposes the transaction in station-scoped history/dashboard data. GridOperators cannot bypass QR verification with `PUT /api/reservations/{id}/complete`; that route remains a Backoffice administrative path.
+Physical energy transfers use the QR workflow: validate the Prosumer's Approved reservation with `/api/reservations/verify-qr`, then confirm the transfer with `/api/reservations/scan-complete`. Successful scanning atomically records completion, invalidates the QR, keeps the consumed slot booked, and exposes the transaction in station-scoped history/dashboard data. GridOperators cannot bypass QR verification with `PUT /api/reservations/{id}/complete`; that route remains a Backoffice administrative path with the same one-time status guard but without the operator QR/time-window checks.
 
 See [Grid Operator API contract](docs/OPERATOR_WORKFLOW.md) for the complete sequence, request/response examples, dashboard and pagination fields, and error responses.
 
@@ -54,7 +54,7 @@ dotnet test SmartMicrogrid.slnx
 - **SlotAvailabilityTests**: Proves slot creation, status queries, and seven-day bookable slot availability logic.
 - **ProsumerAccountTests**: Proves prosumer registration, activation lifecycle, JWT NIC claims, profile self-service, password changes, and deactivation workflows.
 - **ReservationRuleTests**: Proves booking windows, notice rules, ownership isolation, body NIC forgery protection, and QR token lifecycles.
-- **OperatorFlowTests**: Proves GridOperator QR token scanning, atomic completion, slot freeing, replay prevention, station validation, concurrency protection, and role-based access control.
+- **OperatorFlowTests**: Proves GridOperator QR token scanning, atomic completion, consumed-slot protection, replay prevention, station validation, concurrency protection, and role-based access control.
 - **DashboardTests**: Proves owner-scoped prosumer dashboard metrics and station-scoped GridOperator activity counters.
 
 ## Endpoints
