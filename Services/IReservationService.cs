@@ -39,7 +39,7 @@ public interface IReservationService
     // Approves a pending reservation and issues its QR token.
     Task<ReservationResponse?> ApproveAsync(string id, string approvedBy);
 
-    // Completes an approved reservation and frees its slot.
+    // Administratively completes an approved reservation while keeping its consumed slot booked.
     Task<ReservationResponse?> CompleteAsync(string id, string completedBy);
 
     // Verifies a QR token at the point of energy transfer.

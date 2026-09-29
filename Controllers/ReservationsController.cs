@@ -476,7 +476,8 @@ public class ReservationsController : ControllerBase
     /// <remarks>
     /// This is a Backoffice recovery/administrative path. GridOperators receive 403 and must use
     /// POST /api/reservations/scan-complete so the QR, station, status, and time window are verified.
-    /// Successful Backoffice completion records CompletedAt/CompletedBy, invalidates the QR, and releases the slot.
+    /// Successful Backoffice completion records CompletedAt/CompletedBy and invalidates the QR.
+    /// The consumed slot remains booked so it cannot be reserved again.
     /// </remarks>
     /// <param name="id">Reservation ObjectId.</param>
     /// <response code="200">The Backoffice caller completed the Approved reservation.</response>
@@ -598,7 +599,7 @@ public class ReservationsController : ControllerBase
     /// <remarks>
     /// This is the required GridOperator completion path. It applies the same station, token, Approved-status, and
     /// +/-24-hour checks as verify-qr, then atomically claims Approved-to-Completed. Success records CompletedAt and
-    /// CompletedBy, invalidates the QR, releases the slot, and prevents replay/concurrent double completion.
+    /// CompletedBy, invalidates the QR, keeps the consumed slot booked, and prevents replay/concurrent double completion.
     /// </remarks>
     /// <param name="request">The previously verified QR token and assigned station ID.</param>
     /// <response code="200">The transfer was completed; returns the completed ReservationResponse.</response>
