@@ -6,6 +6,8 @@
  * Date: 2026
  */
 
+using System.Text.RegularExpressions;
+using MongoDB.Bson;
 using MongoDB.Driver;
 using SmartMicrogrid.API.Models;
 
@@ -53,20 +55,45 @@ public class ProsumerService : IProsumerService
     }
 
     // Self-registers matching inactive business and credential documents, rolling back an orphaned profile on failure.
-    public async Task<ProsumerResponse> RegisterAsync(RegisterProsumerRequest request)
+    public Task<ProsumerResponse> RegisterAsync(RegisterProsumerRequest request)
     {
-        if (await _db.Prosumers.Find(p => p.Nic == request.Nic).AnyAsync())
+        return CreatePendingAsync(request, "self-registration", "NIC already registered", "Email already registered");
+    }
+
+    // Creates a new prosumer, enforcing NIC/email uniqueness. New prosumers start pending approval.
+    public Task<ProsumerResponse> CreateAsync(CreateProsumerRequest request, string createdBy)
+    {
+        var registration = new RegisterProsumerRequest
         {
-            throw new InvalidOperationException("NIC already registered");
+            Nic = request.Nic,
+            Name = request.Name,
+            Email = request.Email,
+            ContactNumber = request.ContactNumber,
+            Address = request.Address,
+            PanelCapacityKw = request.PanelCapacityKw,
+            Password = request.Password,
+        };
+        return CreatePendingAsync(registration, createdBy, "NIC already exists", "Email already exists");
+    }
+
+    // Both registration routes create the same linked, pending profile and login account.
+    private async Task<ProsumerResponse> CreatePendingAsync(
+        RegisterProsumerRequest request, string createdBy, string nicConflict, string emailConflict)
+    {
+        var nicPattern = new BsonRegularExpression($"^{Regex.Escape(request.Nic)}$", "i");
+        if (await _db.Prosumers.Find(Builders<Prosumer>.Filter.Regex(p => p.Nic, nicPattern)).AnyAsync() ||
+            await _db.Users.Find(Builders<User>.Filter.Regex(u => u.Nic, nicPattern)).AnyAsync())
+        {
+            throw new InvalidOperationException(nicConflict);
         }
 
-        // Email is checked against Users (not Prosumers) because Users holds every login, including Backoffice and Operator accounts.
-        if (await _db.Users.Find(u => u.Email == request.Email).AnyAsync())
+        var emailPattern = new BsonRegularExpression($"^{Regex.Escape(request.Email)}$", "i");
+        if (await _db.Prosumers.Find(Builders<Prosumer>.Filter.Regex(p => p.Email, emailPattern)).AnyAsync() ||
+            await _db.Users.Find(Builders<User>.Filter.Regex(u => u.Email, emailPattern)).AnyAsync())
         {
-            throw new InvalidOperationException("Email already registered");
+            throw new InvalidOperationException(emailConflict);
         }
 
-        // Hash once and reuse it so the Prosumers and Users documents always carry the identical hash.
         var passwordHash = _passwordHasher.Hash(request.Password);
         var createdAt = DateTime.UtcNow;
         var prosumer = new Prosumer
@@ -78,14 +105,11 @@ public class ProsumerService : IProsumerService
             Address = request.Address,
             PanelCapacityKw = request.PanelCapacityKw,
             PasswordHash = passwordHash,
-            // Inactive until Backoffice approves; DeactivationRequested stays false so the derived status is "pending".
             IsActive = false,
             DeactivationRequested = false,
             CreatedAt = createdAt,
-            CreatedBy = "self-registration",
+            CreatedBy = createdBy,
         };
-
-        // Login account linked to the profile by NIC; also inactive, so login is refused until approval.
         var user = new User
         {
             Nic = request.Nic,
@@ -95,57 +119,33 @@ public class ProsumerService : IProsumerService
             Role = "Prosumer",
             IsActive = false,
             CreatedAt = createdAt,
-            CreatedBy = "self-registration",
+            CreatedBy = createdBy,
         };
 
-        await _db.Prosumers.InsertOneAsync(prosumer);
+        try
+        {
+            await _db.Prosumers.InsertOneAsync(prosumer);
+        }
+        catch (MongoWriteException ex) when (ex.WriteError.Code == 11000)
+        {
+            throw new InvalidOperationException(nicConflict, ex);
+        }
 
         try
         {
             await _db.Users.InsertOneAsync(user);
         }
-        catch
+        catch (Exception ex)
         {
-            // The two inserts are not in a transaction, so undo the profile insert to avoid a prosumer with no login account.
             await _db.Prosumers.DeleteOneAsync(p => p.Id == prosumer.Id);
+            if (ex is MongoWriteException { WriteError.Code: 11000 })
+            {
+                throw new InvalidOperationException(emailConflict, ex);
+            }
+
             throw;
         }
 
-        return ToResponse(prosumer);
-    }
-
-    // Creates a new prosumer, enforcing NIC/email uniqueness. New prosumers start pending approval.
-    public async Task<ProsumerResponse> CreateAsync(CreateProsumerRequest request, string createdBy)
-    {
-        if (await NicExistsAsync(request.Nic))
-        {
-            throw new InvalidOperationException("NIC already exists");
-        }
-
-        // Only the Prosumers collection is checked here, unlike RegisterAsync which checks Users.
-        if (await EmailExistsAsync(request.Email))
-        {
-            throw new InvalidOperationException("Email already exists");
-        }
-
-        var prosumer = new Prosumer
-        {
-            Nic = request.Nic,
-            Name = request.Name,
-            Email = request.Email,
-            ContactNumber = request.ContactNumber,
-            Address = request.Address,
-            PanelCapacityKw = request.PanelCapacityKw,
-            PasswordHash = _passwordHasher.Hash(request.Password),
-            IsActive = false,
-            DeactivationRequested = false,
-            CreatedAt = DateTime.UtcNow,
-            // Records which Backoffice user created the profile (email claim from the JWT).
-            CreatedBy = createdBy,
-        };
-
-        // Note: unlike RegisterAsync, this inserts only the profile and creates no Users login document.
-        await _db.Prosumers.InsertOneAsync(prosumer);
         return ToResponse(prosumer);
     }
 
@@ -391,6 +391,55 @@ public class ProsumerService : IProsumerService
     // Reactivates or approves a prosumer and enables the matching login account.
     public async Task<bool> ReactivateAsync(string nic)
     {
+        var prosumer = await _db.Prosumers.Find(p => p.Nic == nic).FirstOrDefaultAsync();
+        if (prosumer is null)
+        {
+            return false;
+        }
+
+        // Profiles created by older Backoffice versions have no login account. Their stored hash
+        // was produced by the same hasher, so approval can restore the missing linked account.
+        var user = await _db.Users.Find(u => u.Nic == nic).FirstOrDefaultAsync();
+        if (user is null)
+        {
+            var emailPattern = new BsonRegularExpression($"^{Regex.Escape(prosumer.Email)}$", "i");
+            if (await _db.Users.Find(Builders<User>.Filter.Regex(u => u.Email, emailPattern)).AnyAsync())
+            {
+                throw new InvalidOperationException("Email already exists");
+            }
+
+            user = new User
+            {
+                Nic = prosumer.Nic,
+                Name = prosumer.Name,
+                Email = prosumer.Email,
+                PasswordHash = prosumer.PasswordHash,
+                Role = "Prosumer",
+                IsActive = false,
+                CreatedAt = prosumer.CreatedAt,
+                CreatedBy = prosumer.CreatedBy,
+            };
+            try
+            {
+                await _db.Users.InsertOneAsync(user);
+            }
+            catch (MongoWriteException ex) when (ex.WriteError.Code == 11000)
+            {
+                // A concurrent approval may have inserted this same NIC/email account first.
+                user = await _db.Users.Find(u => u.Nic == nic && u.Email == prosumer.Email && u.Role == "Prosumer")
+                    .FirstOrDefaultAsync();
+                if (user is null)
+                {
+                    throw new InvalidOperationException("Email already exists", ex);
+                }
+            }
+        }
+
+        if (user.Role != "Prosumer" || user.Email != prosumer.Email)
+        {
+            throw new InvalidOperationException("Credential account does not match prosumer profile");
+        }
+
         var result = await _db.Prosumers.UpdateOneAsync(
             p => p.Nic == nic,
             Builders<Prosumer>.Update
@@ -399,15 +448,11 @@ public class ProsumerService : IProsumerService
                 .Set(p => p.UpdatedAt, DateTime.UtcNow)
         );
 
-        // Enabling the login account is what lets a newly approved prosumer sign in.
-        if (result.MatchedCount > 0)
-        {
-            await _db.Users.UpdateOneAsync(
-                u => u.Nic == nic,
-                Builders<User>.Update
-                    .Set(u => u.IsActive, true)
-                    .Set(u => u.UpdatedAt, DateTime.UtcNow));
-        }
+        await _db.Users.UpdateOneAsync(
+            u => u.Id == user.Id,
+            Builders<User>.Update
+                .Set(u => u.IsActive, true)
+                .Set(u => u.UpdatedAt, DateTime.UtcNow));
 
         return result.MatchedCount > 0;
     }

@@ -121,13 +121,19 @@ public class ProsumersController : ControllerBase
     [HttpPut("{nic}/reactivate")]
     public async Task<IActionResult> Reactivate(string nic)
     {
-        var success = await _prosumerService.ReactivateAsync(nic);
-        if (!success)
+        try
         {
-            // The service returns false only when no prosumer matches the NIC.
-            return NotFound();
-        }
+            var success = await _prosumerService.ReactivateAsync(nic);
+            if (!success)
+            {
+                return NotFound();
+            }
 
-        return NoContent();
+            return NoContent();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(new { message = ex.Message });
+        }
     }
 }
