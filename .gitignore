@@ -3,3 +3,5 @@ obj/
 *.user
 .vs/
 appsettings.Development.json
+publish/
+publish.zip
