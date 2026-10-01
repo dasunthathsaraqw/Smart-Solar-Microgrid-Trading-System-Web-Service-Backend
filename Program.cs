@@ -122,6 +122,37 @@ app.UseAuthorization();
 
 app.MapControllers();
 
+// A lightweight landing page confirms that the ASP.NET Core app responded; database health is checked separately.
+app.MapGet("/", () => Results.Content("""
+    <!doctype html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>Smart Solar Microgrid API</title>
+      <style>
+        :root { color-scheme: light; font-family: system-ui, sans-serif; }
+        body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f3f7f5; color: #18332b; }
+        main { box-sizing: border-box; width: min(92%, 620px); padding: 2.5rem; background: #fff; border: 1px solid #dce9e1; border-radius: 18px; box-shadow: 0 12px 36px #18332b12; }
+        .brand { margin: 0 0 1.5rem; color: #287a50; font-weight: 700; letter-spacing: .03em; }
+        h1 { margin: 0 0 1rem; font-size: clamp(2rem, 5vw, 2.75rem); }
+        .badge { display: inline-block; padding: .35rem .8rem; border-radius: 999px; background: #e2f5e8; color: #17643d; font-weight: 700; }
+        p { line-height: 1.6; }
+        a { color: #17643d; font-weight: 600; }
+      </style>
+    </head>
+    <body>
+      <main>
+        <p class="brand">Smart Solar Microgrid</p>
+        <h1>API is running.</h1>
+        <span class="badge">Online</span>
+        <p>This server hosts the solar station, user, and reservation API. API routes are under <strong>/api</strong>.</p>
+        <p>Check database health at <a href="api/health">GET /api/health</a>.</p>
+      </main>
+    </body>
+    </html>
+    """, "text/html; charset=utf-8"));
+
 // Seed the initial Backoffice admin user if the Users collection is empty.
 // Wrapped in try/catch so a MongoDB outage at startup logs a warning instead of
 // crashing the whole process before Kestrel ever starts listening.
