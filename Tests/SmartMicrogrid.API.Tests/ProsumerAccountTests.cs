@@ -60,6 +60,107 @@ public sealed class ProsumerAccountTests
         Assert.Contains(new JwtSecurityTokenHandler().ReadJwtToken(token).Claims, claim => claim.Type == "nic" && claim.Value == nic);
     }
 
+    // Backoffice creation must produce the same pending profile and credential pair as mobile registration.
+    [Fact]
+    public async Task BackofficeCreate_PendingThenApproved_CanAuthenticate()
+    {
+        using var anonymous = _factory.CreateClient();
+        using var admin = await _helpers.LoginAsync("admin@smartsolar.com", "Admin@123");
+        var nic = $"2000{Random.Shared.Next(10000000, 99999999):D8}";
+        var email = $"backoffice-{Guid.NewGuid():N}@example.com";
+        const string password = "Prosumer@Test123";
+
+        var creation = await admin.PostAsJsonAsync("/api/prosumers", new
+        {
+            nic, name = "Backoffice Prosumer", email, password,
+            contactNumber = "0771234567", address = "Colombo", panelCapacityKw = 5.5,
+        });
+        Assert.Equal(HttpStatusCode.Created, creation.StatusCode);
+
+        var profiles = await _factory.Database.GetCollection<Prosumer>("Prosumers").Find(p => p.Nic == nic).ToListAsync();
+        var users = await _factory.Database.GetCollection<User>("Users").Find(u => u.Nic == nic).ToListAsync();
+        var profile = Assert.Single(profiles);
+        var user = Assert.Single(users);
+        Assert.Equal(email, profile.Email);
+        Assert.Equal(email, user.Email);
+        Assert.Equal("Prosumer", user.Role);
+        Assert.False(profile.IsActive);
+        Assert.False(user.IsActive);
+        Assert.NotEqual(password, profile.PasswordHash);
+        Assert.Equal(profile.PasswordHash, user.PasswordHash);
+        Assert.Equal(HttpStatusCode.Forbidden,
+            (await anonymous.PostAsJsonAsync("/api/auth/login", new { email, password })).StatusCode);
+
+        Assert.Equal(HttpStatusCode.NoContent, (await admin.PutAsync($"/api/prosumers/{nic}/reactivate", null)).StatusCode);
+        var login = await anonymous.PostAsJsonAsync("/api/auth/login", new { email, password });
+        Assert.Equal(HttpStatusCode.OK, login.StatusCode);
+        var token = (await login.Content.ReadFromJsonAsync<LoginResponse>())!.Token;
+        Assert.Contains(new JwtSecurityTokenHandler().ReadJwtToken(token).Claims,
+            claim => claim.Type == "nic" && claim.Value == nic);
+    }
+
+    // Both entry points reject duplicate business or login identities without leaving orphan documents.
+    [Fact]
+    public async Task BackofficeCreate_DuplicateNicOrEmail_IsRejectedWithoutOrphans()
+    {
+        using var anonymous = _factory.CreateClient();
+        using var admin = await _helpers.LoginAsync("admin@smartsolar.com", "Admin@123");
+        var nic = $"2000{Random.Shared.Next(10000000, 99999999):D8}";
+        var email = $"unique-{Guid.NewGuid():N}@example.com";
+        const string password = "Prosumer@Test123";
+        object Request(string candidateNic, string candidateEmail) => new
+        {
+            nic = candidateNic, name = "Duplicate Check", email = candidateEmail, password,
+            contactNumber = "0771234567", address = "Colombo", panelCapacityKw = 5.5,
+        };
+
+        Assert.Equal(HttpStatusCode.Created,
+            (await admin.PostAsJsonAsync("/api/prosumers", Request(nic, email))).StatusCode);
+        var otherNic = $"2000{Random.Shared.Next(10000000, 99999999):D8}";
+        Assert.Equal(HttpStatusCode.Conflict,
+            (await admin.PostAsJsonAsync("/api/prosumers", Request(nic, $"other-{Guid.NewGuid():N}@example.com"))).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict,
+            (await admin.PostAsJsonAsync("/api/prosumers", Request(otherNic, email.ToUpperInvariant()))).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict,
+            (await admin.PostAsJsonAsync("/api/prosumers", Request(otherNic, "admin@smartsolar.com"))).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest,
+            (await anonymous.PostAsJsonAsync("/api/prosumers/register", Request(otherNic, email))).StatusCode);
+
+        var profiles = await _factory.Database.GetCollection<Prosumer>("Prosumers").Find(p => p.Nic == nic || p.Nic == otherNic).ToListAsync();
+        var users = await _factory.Database.GetCollection<User>("Users").Find(u => u.Nic == nic || u.Nic == otherNic).ToListAsync();
+        Assert.Single(profiles);
+        Assert.Single(users);
+        Assert.Equal(nic, users[0].Nic);
+    }
+
+    // Reapproving a legacy Backoffice profile repairs the credential document omitted by older code.
+    [Fact]
+    public async Task Approve_LegacyBackofficeProfile_RestoresAuthentication()
+    {
+        using var anonymous = _factory.CreateClient();
+        using var admin = await _helpers.LoginAsync("admin@smartsolar.com", "Admin@123");
+        var nic = $"2000{Random.Shared.Next(10000000, 99999999):D8}";
+        var email = $"legacy-{Guid.NewGuid():N}@example.com";
+        const string password = "Prosumer@Test123";
+        var creation = await admin.PostAsJsonAsync("/api/prosumers", new
+        {
+            nic, name = "Legacy Prosumer", email, password,
+            contactNumber = "0771234567", address = "Colombo", panelCapacityKw = 5.5,
+        });
+        Assert.Equal(HttpStatusCode.Created, creation.StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await admin.PutAsync($"/api/prosumers/{nic}/reactivate", null)).StatusCode);
+        var users = _factory.Database.GetCollection<User>("Users");
+        await users.DeleteOneAsync(u => u.Nic == nic);
+        Assert.Equal(HttpStatusCode.Unauthorized,
+            (await anonymous.PostAsJsonAsync("/api/auth/login", new { email, password })).StatusCode);
+
+        Assert.Equal(HttpStatusCode.NoContent, (await admin.PutAsync($"/api/prosumers/{nic}/reactivate", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK,
+            (await anonymous.PostAsJsonAsync("/api/auth/login", new { email, password })).StatusCode);
+        var restored = await users.Find(u => u.Nic == nic).ToListAsync();
+        Assert.Equal("Prosumer", Assert.Single(restored).Role);
+    }
+
     // Rule: /me reads and updates only the caller's profile, synchronizing editable identity fields.
     [Fact]
     public async Task Profile_TwoProsumers_UpdatesOnlySignedInOwner()
